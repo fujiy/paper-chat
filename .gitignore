@@ -5,3 +5,5 @@ DerivedData/
 xcuserdata/
 *.xcuserstate
 docs/private/
+__pycache__/
+*.py[cod]
