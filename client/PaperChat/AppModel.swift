@@ -52,7 +52,8 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func signOut() {
+    func signOut() async {
+        try? await client.revokeCurrentSession()
         KeychainStore.delete(account: "tokens")
         isAuthenticated = false
         recentPapers = []
@@ -101,6 +102,34 @@ final class AppModel: ObservableObject {
 
     func choose(paper: Paper) async {
         await perform { try await open(paper: paper) }
+    }
+
+    func switchThread(to thread: ChatThread?) async {
+        guard let thread else { return }
+        selectedThread = thread
+        await perform {
+            messages = try await client.messages(threadID: thread.id)
+            if let paper = selectedPaper {
+                try await client.saveReadingState(
+                    paperID: paper.id, pageIndex: pageIndex, activeThreadID: thread.id
+                )
+            }
+        }
+    }
+
+    func createThread() async {
+        guard let paper = selectedPaper else { return }
+        await perform {
+            let thread = try await client.createThread(
+                paperID: paper.id, title: "Thread \(threads.count + 1)"
+            )
+            threads.insert(thread, at: 0)
+            selectedThread = thread
+            messages = []
+            try await client.saveReadingState(
+                paperID: paper.id, pageIndex: pageIndex, activeThreadID: thread.id
+            )
+        }
     }
 
     func send() async {

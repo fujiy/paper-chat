@@ -5,7 +5,7 @@ services:
     build:
       context: .
       args:
-        CODEX_VERSION: ${CODEX_VERSION:-0.146.0-alpha.3}
+        CODEX_VERSION: ${CODEX_VERSION:-0.145.0}
     restart: unless-stopped
     environment:
       DATA_DIR: /data
@@ -17,11 +17,9 @@ services:
       CODEX_HOME_DIR: /data/codex/home
       CODEX_WORKSPACE: /data/codex/workspace
       CODEX_MODEL: ${CODEX_MODEL:-}
-    secrets:
-      - paperchat_bootstrap_token
-      - zotero_service_token
     volumes:
       - paperchat_data:/data
+      - paperchat_secrets:/run/secrets:ro
     ports:
       - "${PAPERCHAT_BIND_ADDRESS:-127.0.0.1}:${PAPERCHAT_HTTP_PORT:-8001}:8000"
     depends_on:
@@ -41,7 +39,7 @@ services:
     environment: &zotero-environment
       ZOTERO_LIBRARY_TYPE: ${ZOTERO_LIBRARY_TYPE:-user}
       ZOTERO_LIBRARY_ID: ${ZOTERO_LIBRARY_ID:-}
-      PUBLIC_BASE_URL: ${ZOTERO_PUBLIC_BASE_URL:-http://localhost:8000}
+      PUBLIC_BASE_URL: ${ZOTERO_PUBLIC_BASE_URL:-${PUBLIC_BASE_URL:-http://localhost:8000}}
       ADMIN_AUTH_ENABLED: ${ADMIN_AUTH_ENABLED:-1}
       ADMIN_SECRET_DIR: /data/secrets
       OAUTH_ENABLED: ${OAUTH_ENABLED:-1}
@@ -53,10 +51,9 @@ services:
       HTTP_HOST: 0.0.0.0
       HTTP_PORT: 8000
       SERVICE_TOKEN_FILE: /run/secrets/zotero_service_token
-    secrets:
-      - zotero_service_token
     volumes:
       - zotero_data:/data
+      - paperchat_secrets:/run/secrets:ro
     ports:
       - "127.0.0.1:${ZOTERO_HTTP_PORT:-8000}:8000"
     healthcheck:
@@ -109,12 +106,9 @@ services:
 
 volumes:
   paperchat_data:
+  paperchat_secrets:
+    external: true
+    name: ${PAPERCHAT_SECRETS_VOLUME:-paperchat_secrets}
   zotero_data:
+    external: true
     name: ${ZOTERO_DATA_VOLUME:-zotero-mcp-library_zotero_data}
-
-secrets:
-  paperchat_bootstrap_token:
-    file: .secrets/paperchat_bootstrap_token
-  zotero_service_token:
-    file: .secrets/zotero_service_token
-

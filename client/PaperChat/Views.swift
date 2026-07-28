@@ -89,7 +89,7 @@ struct LibraryView: View {
                 }
                 ToolbarItem {
                     Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right") {
-                        model.signOut()
+                        Task { await model.signOut() }
                     }
                 }
             }
@@ -204,13 +204,21 @@ struct ChatPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if model.threads.count > 1 {
+            HStack {
                 Picker("Thread", selection: $model.selectedThread) {
                     ForEach(model.threads) { thread in Text(thread.title).tag(Optional(thread)) }
                 }
                 .pickerStyle(.menu)
-                .padding()
+                .onChange(of: model.selectedThread) { _, thread in
+                    Task { await model.switchThread(to: thread) }
+                }
+                Spacer()
+                Button("New Thread", systemImage: "plus") {
+                    Task { await model.createThread() }
+                }
+                .labelStyle(.iconOnly)
             }
+            .padding()
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 12) {

@@ -1,5 +1,5 @@
 FROM node:24-bookworm-slim AS codex
-ARG CODEX_VERSION=0.146.0-alpha.3
+ARG CODEX_VERSION=0.145.0
 RUN npm install --global "@openai/codex@${CODEX_VERSION}"
 
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS runtime

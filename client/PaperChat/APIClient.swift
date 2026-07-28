@@ -4,6 +4,7 @@ actor APIClient {
     private var baseURL: URL
     private var tokens: AuthTokens?
     private let session: URLSession
+    private var refreshTask: Task<AuthTokens, Error>?
 
     init(baseURL: URL, tokens: AuthTokens? = nil, session: URLSession = .shared) {
         self.baseURL = baseURL
@@ -79,9 +80,17 @@ actor APIClient {
 
     func downloadPDF(paperID: String) async throws -> (Data, String?) {
         let request = try authorizedRequest("api/papers/\(paperID)/pdf")
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await data(for: request, authenticated: true)
         try validate(response: response, data: data)
         return (data, (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "ETag"))
+    }
+
+    func revokeCurrentSession() async throws {
+        guard let sessionID = tokens?.sessionId else { return }
+        let request = try authorizedRequest("api/sessions/\(sessionID)", method: "DELETE")
+        let (data, response) = try await data(for: request, authenticated: true)
+        try validate(response: response, data: data)
+        tokens = nil
     }
 
     func streamMessage(
@@ -99,16 +108,21 @@ actor APIClient {
                     request.httpBody = try JSONSerialization.data(withJSONObject: [
                         "content": content,
                         "current_page_index": pageIndex,
-                        "selected_text": selectedText ?? NSNull(),
+                        "selected_text": (selectedText ?? NSNull()) as Any,
                         "client_request_id": UUID().uuidString,
                     ])
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                    let (bytes, response) = try await session.bytes(for: request)
-                    guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                        throw APIError.http((response as? HTTPURLResponse)?.statusCode ?? -1)
+                    var result = try await session.bytes(for: request)
+                    if (result.1 as? HTTPURLResponse)?.statusCode == 401 {
+                        try await refresh()
+                        request = try withLatestAccessToken(request)
+                        result = try await session.bytes(for: request)
+                    }
+                    guard let http = result.1 as? HTTPURLResponse, http.statusCode == 200 else {
+                        throw APIError.http((result.1 as? HTTPURLResponse)?.statusCode ?? -1)
                     }
                     var eventName = ""
-                    for try await line in bytes.lines {
+                    for try await line in result.0.lines {
                         if line.hasPrefix("event: ") {
                             eventName = String(line.dropFirst(7))
                         } else if line.hasPrefix("data: ") {
@@ -147,9 +161,70 @@ actor APIClient {
             request.httpBody = try JSONEncoder.paperChat.encode(body)
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await data(for: request, authenticated: authenticated)
         try validate(response: response, data: data)
         return try JSONDecoder.paperChat.decode(Response.self, from: data)
+    }
+
+    private func data(
+        for request: URLRequest, authenticated: Bool
+    ) async throws -> (Data, URLResponse) {
+        var result = try await session.data(for: request)
+        if authenticated, (result.1 as? HTTPURLResponse)?.statusCode == 401 {
+            try await refresh()
+            result = try await session.data(for: withLatestAccessToken(request))
+        }
+        return result
+    }
+
+    private func refresh() async throws {
+        if let refreshTask {
+            tokens = try await refreshTask.value
+            return
+        }
+        guard let refreshToken = tokens?.refreshToken else { throw APIError.unauthorized }
+        guard let url = URL(string: "api/auth/refresh", relativeTo: baseURL)?.absoluteURL else {
+            throw APIError.invalidURL
+        }
+        let session = session
+        let task = Task {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 30
+            request.httpBody = try JSONEncoder.paperChat.encode(
+                ["refresh_token": refreshToken]
+            )
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw APIError.invalidResponse
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                throw APIError.server(
+                    http.statusCode,
+                    String(data: data, encoding: .utf8) ?? "Request failed"
+                )
+            }
+            let refreshed = try JSONDecoder.paperChat.decode(AuthTokens.self, from: data)
+            try KeychainStore.save(JSONEncoder.paperChat.encode(refreshed), account: "tokens")
+            return refreshed
+        }
+        refreshTask = task
+        defer { refreshTask = nil }
+        do {
+            tokens = try await task.value
+        } catch {
+            KeychainStore.delete(account: "tokens")
+            tokens = nil
+            throw error
+        }
+    }
+
+    private func withLatestAccessToken(_ request: URLRequest) throws -> URLRequest {
+        guard let accessToken = tokens?.accessToken else { throw APIError.unauthorized }
+        var request = request
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        return request
     }
 
     private func authorizedRequest(
