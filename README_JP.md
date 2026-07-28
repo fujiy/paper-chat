@@ -85,9 +85,12 @@ docker exec -e CODEX_HOME=/data/codex/home \
 ```sh
 docker exec -i paperchat-paperchat-api-1 /app/.venv/bin/python - \
   < scripts/codex-smoke-test.py
+
+docker exec -i paperchat-paperchat-api-1 /app/.venv/bin/python - \
+  < scripts/codex-api-smoke-test.py
 ```
 
-実論文を使ったCodex E2E試験は、PDF本文がOpenAIへ送信されることを確認したうえで実行してください。
+後者は、一時SQLite上で認証、synthetic paper、HTTP/SSE、会話保存、Codex thread ID保存まで確認します。実論文を使ったCodex E2E試験は、PDF本文がOpenAIへ送信されることを確認したうえで実行してください。
 
 ## アプリの接続
 
