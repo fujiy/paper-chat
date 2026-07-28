@@ -1,0 +1,7 @@
+.env
+.secrets/
+.build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+docs/private/

@@ -1,0 +1,7 @@
+services:
+  paperchat-api:
+    build:
+      target: runtime
+    environment:
+      LLM_BACKEND: fake
+

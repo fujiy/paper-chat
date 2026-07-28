@@ -1,0 +1,120 @@
+name: paperchat
+
+services:
+  paperchat-api:
+    build:
+      context: .
+      args:
+        CODEX_VERSION: ${CODEX_VERSION:-0.146.0-alpha.3}
+    restart: unless-stopped
+    environment:
+      DATA_DIR: /data
+      PUBLIC_BASE_URL: ${PAPERCHAT_PUBLIC_BASE_URL:-http://localhost:8001}
+      BOOTSTRAP_TOKEN_FILE: /run/secrets/paperchat_bootstrap_token
+      ZOTERO_LIBRARY_URL: http://zotero-library-app:8000
+      ZOTERO_SERVICE_TOKEN_FILE: /run/secrets/zotero_service_token
+      LLM_BACKEND: ${LLM_BACKEND:-codex}
+      CODEX_HOME_DIR: /data/codex/home
+      CODEX_WORKSPACE: /data/codex/workspace
+      CODEX_MODEL: ${CODEX_MODEL:-}
+    secrets:
+      - paperchat_bootstrap_token
+      - zotero_service_token
+    volumes:
+      - paperchat_data:/data
+    ports:
+      - "${PAPERCHAT_BIND_ADDRESS:-127.0.0.1}:${PAPERCHAT_HTTP_PORT:-8001}:8000"
+    depends_on:
+      zotero-library-app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  zotero-library-app:
+    build:
+      context: ../zotero-mcp-library
+    command: zotero-mcp
+    restart: unless-stopped
+    environment: &zotero-environment
+      ZOTERO_LIBRARY_TYPE: ${ZOTERO_LIBRARY_TYPE:-user}
+      ZOTERO_LIBRARY_ID: ${ZOTERO_LIBRARY_ID:-}
+      PUBLIC_BASE_URL: ${ZOTERO_PUBLIC_BASE_URL:-http://localhost:8000}
+      ADMIN_AUTH_ENABLED: ${ADMIN_AUTH_ENABLED:-1}
+      ADMIN_SECRET_DIR: /data/secrets
+      OAUTH_ENABLED: ${OAUTH_ENABLED:-1}
+      DATA_DIR: /data
+      DATABASE_PATH: /data/db/zotero_mcp.sqlite3
+      PDF_DIR: /data/pdfs
+      LOG_DIR: /data/logs
+      SEARCH_INDEX_DIR: /data/search-index/pages
+      HTTP_HOST: 0.0.0.0
+      HTTP_PORT: 8000
+      SERVICE_TOKEN_FILE: /run/secrets/zotero_service_token
+    secrets:
+      - zotero_service_token
+    volumes:
+      - zotero_data:/data
+    ports:
+      - "127.0.0.1:${ZOTERO_HTTP_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  zotero-library-worker:
+    build:
+      context: ../zotero-mcp-library
+    command: zotero-mcp-worker --mode sync-download
+    restart: unless-stopped
+    environment:
+      <<: *zotero-environment
+      ZOTERO_API_KEY: ${ZOTERO_API_KEY:-}
+      SYNC_POLL_SECONDS: ${SYNC_POLL_SECONDS:-60}
+      PDF_DOWNLOAD_ENABLED: ${PDF_DOWNLOAD_ENABLED:-1}
+      PDF_DOWNLOAD_BATCH_SIZE: ${PDF_DOWNLOAD_BATCH_SIZE:-5}
+      PDF_DOWNLOAD_DELAY_SECONDS: ${PDF_DOWNLOAD_DELAY_SECONDS:-2}
+    volumes:
+      - zotero_data:/data
+
+  zotero-library-extractor:
+    build:
+      context: ../zotero-mcp-library
+    command: zotero-mcp-worker --mode extract
+    restart: unless-stopped
+    user: "10001:10001"
+    network_mode: "none"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 512m
+    tmpfs: [/tmp]
+    environment:
+      DATA_DIR: /data
+      DATABASE_PATH: /data/db/zotero_mcp.sqlite3
+      PDF_DIR: /data/pdfs
+      LOG_DIR: /data/logs
+      SEARCH_INDEX_DIR: /data/search-index/pages
+      SYNC_POLL_SECONDS: ${SYNC_POLL_SECONDS:-60}
+      PDF_EXTRACTION_ENABLED: ${PDF_EXTRACTION_ENABLED:-1}
+      PDF_EXTRACTION_BATCH_SIZE: ${PDF_EXTRACTION_BATCH_SIZE:-5}
+      PDF_OCR_MODE: ${PDF_OCR_MODE:-fallback}
+      PDF_OCR_LANGUAGES: ${PDF_OCR_LANGUAGES:-eng+jpn}
+      PDF_OCR_DPI: ${PDF_OCR_DPI:-200}
+    volumes:
+      - zotero_data:/data
+
+volumes:
+  paperchat_data:
+  zotero_data:
+    name: ${ZOTERO_DATA_VOLUME:-zotero-mcp-library_zotero_data}
+
+secrets:
+  paperchat_bootstrap_token:
+    file: .secrets/paperchat_bootstrap_token
+  zotero_service_token:
+    file: .secrets/zotero_service_token
+

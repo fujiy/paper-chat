@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import sqlite3
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+SCHEMA = """
+PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS papers (
+  id TEXT PRIMARY KEY, title TEXT NOT NULL, authors_json TEXT NOT NULL DEFAULT '[]',
+  year TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_opened_at TEXT
+);
+CREATE TABLE IF NOT EXISTS paper_identifiers (
+  paper_id TEXT NOT NULL, kind TEXT NOT NULL, library_type TEXT, library_id TEXT,
+  value TEXT NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY(kind, library_type, library_id, value),
+  FOREIGN KEY(paper_id) REFERENCES papers(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS reading_states (
+  paper_id TEXT NOT NULL, device_id TEXT NOT NULL, page_index INTEGER NOT NULL DEFAULT 0,
+  scroll_offset REAL NOT NULL DEFAULT 0, zoom_scale REAL NOT NULL DEFAULT 1,
+  display_mode TEXT NOT NULL DEFAULT 'singlePageContinuous', active_thread_id TEXT,
+  updated_at TEXT NOT NULL, PRIMARY KEY(paper_id, device_id),
+  FOREIGN KEY(paper_id) REFERENCES papers(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS threads (
+  id TEXT PRIMARY KEY, paper_id TEXT NOT NULL, title TEXT NOT NULL,
+  backend_type TEXT NOT NULL, backend_thread_id TEXT, backend_status TEXT NOT NULL DEFAULT 'ready',
+  summary TEXT, is_primary INTEGER NOT NULL DEFAULT 0, last_used_at TEXT NOT NULL,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  FOREIGN KEY(paper_id) REFERENCES papers(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS messages (
+  id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL,
+  page_refs_json TEXT NOT NULL DEFAULT '[]', selected_text TEXT, client_request_id TEXT,
+  backend_turn_id TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  FOREIGN KEY(thread_id) REFERENCES threads(id) ON DELETE CASCADE,
+  UNIQUE(thread_id, client_request_id)
+);
+CREATE TABLE IF NOT EXISTS device_sessions (
+  id TEXT PRIMARY KEY, device_id TEXT NOT NULL, device_name TEXT NOT NULL,
+  access_hash TEXT NOT NULL UNIQUE, access_expires_at INTEGER NOT NULL,
+  refresh_hash TEXT NOT NULL UNIQUE, refresh_expires_at INTEGER NOT NULL,
+  revoked_at TEXT, created_at TEXT NOT NULL, last_used_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_papers_recent ON papers(last_opened_at DESC);
+CREATE INDEX IF NOT EXISTS idx_threads_paper ON threads(paper_id, last_used_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, created_at);
+"""
+
+
+def now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def connect(path: Path) -> sqlite3.Connection:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def init(path: Path) -> None:
+    with connect(path) as conn:
+        conn.executescript(SCHEMA)
+
+
+def as_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    result = dict(row)
+    for key in list(result):
+        if key.endswith("_json"):
+            result[key.removesuffix("_json")] = json.loads(result.pop(key) or "null")
+    return result
+
+
+def new_id() -> str:
+    return str(uuid4())
