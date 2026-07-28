@@ -164,6 +164,21 @@ async def resolve_paper(
                 """,
                 (paper_id, *identifier, timestamp),
             )
+        if metadata.get("parent_item_key"):
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO paper_identifiers
+                  (paper_id, kind, library_type, library_id, value, created_at)
+                VALUES (?, 'zotero_item', ?, ?, ?, ?)
+                """,
+                (
+                    paper_id,
+                    metadata.get("library_type"),
+                    str(metadata.get("library_id") or ""),
+                    metadata["parent_item_key"],
+                    timestamp,
+                ),
+            )
         result = paper_detail(conn, paper_id, str(_["device_id"]))
     return result
 

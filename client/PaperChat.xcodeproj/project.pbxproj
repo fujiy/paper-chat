@@ -1,0 +1,249 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000001 /* PaperChatApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* PaperChatApp.swift */; };
+		A10000000000000000000002 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* Models.swift */; };
+		A10000000000000000000003 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* KeychainStore.swift */; };
+		A10000000000000000000004 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* APIClient.swift */; };
+		A10000000000000000000005 /* PDFCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* PDFCache.swift */; };
+		A10000000000000000000006 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* AppModel.swift */; };
+		A10000000000000000000007 /* PDFKitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* PDFKitView.swift */; };
+		A10000000000000000000008 /* Views.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* Views.swift */; };
+		A10000000000000000000009 /* PDFKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* PDFKit.framework */; };
+		A1000000000000000000000A /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* Security.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A20000000000000000000001 /* PaperChatApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaperChatApp.swift; sourceTree = "<group>"; };
+		A20000000000000000000002 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		A20000000000000000000003 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		A20000000000000000000004 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
+		A20000000000000000000005 /* PDFCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFCache.swift; sourceTree = "<group>"; };
+		A20000000000000000000006 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		A20000000000000000000007 /* PDFKitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFKitView.swift; sourceTree = "<group>"; };
+		A20000000000000000000008 /* Views.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views.swift; sourceTree = "<group>"; };
+		A20000000000000000000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A20000000000000000000010 /* PDFKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = PDFKit.framework; path = System/Library/Frameworks/PDFKit.framework; sourceTree = SDKROOT; };
+		A20000000000000000000011 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		A20000000000000000000012 /* PaperChat.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PaperChat.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A30000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000009 /* PDFKit.framework in Frameworks */,
+				A1000000000000000000000A /* Security.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A40000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				A40000000000000000000002 /* PaperChat */,
+				A40000000000000000000003 /* Frameworks */,
+				A40000000000000000000004 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A40000000000000000000002 /* PaperChat */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000001 /* PaperChatApp.swift */,
+				A20000000000000000000002 /* Models.swift */,
+				A20000000000000000000003 /* KeychainStore.swift */,
+				A20000000000000000000004 /* APIClient.swift */,
+				A20000000000000000000005 /* PDFCache.swift */,
+				A20000000000000000000006 /* AppModel.swift */,
+				A20000000000000000000007 /* PDFKitView.swift */,
+				A20000000000000000000008 /* Views.swift */,
+				A20000000000000000000009 /* Info.plist */,
+			);
+			path = PaperChat;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000003 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000010 /* PDFKit.framework */,
+				A20000000000000000000011 /* Security.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000004 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000012 /* PaperChat.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A50000000000000000000001 /* PaperChat */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A90000000000000000000002 /* Build configuration list for PBXNativeTarget "PaperChat" */;
+			buildPhases = (
+				A60000000000000000000001 /* Sources */,
+				A30000000000000000000001 /* Frameworks */,
+				A70000000000000000000001 /* Resources */,
+			);
+			buildRules = ();
+			dependencies = ();
+			name = PaperChat;
+			productName = PaperChat;
+			productReference = A20000000000000000000012 /* PaperChat.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A80000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2630;
+				LastUpgradeCheck = 2630;
+				TargetAttributes = {
+					A50000000000000000000001 = { CreatedOnToolsVersion = 26.3; };
+				};
+			};
+			buildConfigurationList = A90000000000000000000001 /* Build configuration list for PBXProject "PaperChat" */;
+			compatibilityVersion = "Xcode 16.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base);
+			mainGroup = A40000000000000000000001;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A40000000000000000000004 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (A50000000000000000000001 /* PaperChat */);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A70000000000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A60000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000001 /* PaperChatApp.swift in Sources */,
+				A10000000000000000000002 /* Models.swift in Sources */,
+				A10000000000000000000003 /* KeychainStore.swift in Sources */,
+				A10000000000000000000004 /* APIClient.swift in Sources */,
+				A10000000000000000000005 /* PDFCache.swift in Sources */,
+				A10000000000000000000006 /* AppModel.swift in Sources */,
+				A10000000000000000000007 /* PDFKitView.swift in Sources */,
+				A10000000000000000000008 /* Views.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		AA0000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		AA0000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		AA0000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = PaperChat/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.fujiy.PaperChat;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		AA0000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = PaperChat/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.fujiy.PaperChat;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A90000000000000000000001 /* Build configuration list for PBXProject "PaperChat" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (AA0000000000000000000001, AA0000000000000000000002);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A90000000000000000000002 /* Build configuration list for PBXNativeTarget "PaperChat" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (AA0000000000000000000003, AA0000000000000000000004);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A80000000000000000000001 /* Project object */;
+}
