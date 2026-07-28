@@ -57,6 +57,7 @@ class MessageRequest(BaseModel):
     current_page_index: int = Field(default=0, ge=0)
     selected_text: str | None = Field(default=None, max_length=20000)
     client_request_id: str = Field(min_length=1, max_length=200)
+    model: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 @app.get("/health")
@@ -100,6 +101,11 @@ async def search_library(
     settings: SettingsDependency,
 ):
     return await ZoteroLibrary(settings).search(q)
+
+
+@app.get("/api/models")
+async def list_models(_: Session, settings: SettingsDependency):
+    return {"models": await backend(settings).list_models()}
 
 
 @app.post("/api/papers/resolve")
@@ -386,7 +392,9 @@ async def send_message(
         answer = ""
         try:
             yield sse("message", {"message_id": assistant_id, "user_message_id": user_id})
-            async for event in backend(settings).stream(prompt, thread["backend_thread_id"]):
+            async for event in backend(settings).stream(
+                prompt, thread["backend_thread_id"], payload.model
+            ):
                 if event.kind == "thread" and event.backend_thread_id:
                     with connect(settings.resolved_database_path) as conn:
                         conn.execute(

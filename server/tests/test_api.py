@@ -71,6 +71,7 @@ def test_paper_thread_reading_state_and_streaming_chat(tmp_path, monkeypatch):
     with client_for(tmp_path, monkeypatch) as client:
         tokens = register(client)
         headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+        models = client.get("/api/models", headers=headers)
         resolved = client.post(
             "/api/papers/resolve", json={"attachment_key": "ATT1"}, headers=headers
         )
@@ -95,6 +96,7 @@ def test_paper_thread_reading_state_and_streaming_chat(tmp_path, monkeypatch):
                 "current_page_index": 4,
                 "selected_text": "Test evidence.",
                 "client_request_id": "request-1",
+                "model": "fake",
             },
             headers=headers,
         )
@@ -102,6 +104,8 @@ def test_paper_thread_reading_state_and_streaming_chat(tmp_path, monkeypatch):
         paper_after = client.get(f"/api/papers/{paper['id']}", headers=headers).json()
 
     assert state.status_code == 200
+    assert models.status_code == 200
+    assert models.json()["models"][0]["id"] == "fake"
     assert chat.status_code == 200
     events = [
         line.removeprefix("event: ")

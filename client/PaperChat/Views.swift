@@ -1,15 +1,27 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         Group {
-            if model.isAuthenticated { LibraryView() }
-            else { SignInView() }
+            if model.isAuthenticated {
+                LibraryWorkspace()
+            } else {
+                SignInView()
+            }
         }
+        .dynamicTypeSize(.xSmall ... .xxxLarge)
         .overlay {
-            if model.isBusy { ProgressView().controlSize(.large) }
+            if model.isBusy {
+                ProgressView()
+                    .controlSize(.large)
+                    .padding(22)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+            }
         }
         .alert("PaperChat", isPresented: Binding(
             get: { model.errorMessage != nil },
@@ -27,11 +39,11 @@ struct SignInView: View {
     @State private var bootstrapToken = ""
 
     var body: some View {
-        VStack(spacing: 22) {
+        VStack(spacing: 20) {
             Image(systemName: "doc.text.magnifyingglass")
-                .font(.system(size: 56))
+                .font(.system(size: 48))
                 .foregroundStyle(.tint)
-            VStack(spacing: 6) {
+            VStack(spacing: 5) {
                 Text("PaperChat").font(.largeTitle.bold())
                 Text("Your papers and conversations, continued everywhere.")
                     .foregroundStyle(.secondary)
@@ -40,144 +52,518 @@ struct SignInView: View {
                 TextField("Server URL", text: $model.serverURLString)
                     .textContentType(.URL)
                 SecureField("One-time bootstrap token", text: $bootstrapToken)
-                Button("Connect") { Task { await model.signIn(bootstrapToken: bootstrapToken) } }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(bootstrapToken.isEmpty)
+                Button("Connect") {
+                    Task { await model.signIn(bootstrapToken: bootstrapToken) }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(bootstrapToken.isEmpty)
             }
             .formStyle(.grouped)
-            .frame(maxWidth: 520)
+            .frame(maxWidth: 500)
         }
         .padding()
     }
 }
 
-struct LibraryView: View {
+struct LibraryWorkspace: View {
     @EnvironmentObject private var model: AppModel
-    @State private var query = ""
+    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
 
     var body: some View {
-        NavigationSplitView {
-            List(selection: $model.selectedPaper) {
-                Section("Recent") {
-                    ForEach(model.recentPapers) { paper in
-                        PaperRow(title: paper.title, authors: paper.authors, year: paper.year)
-                            .tag(paper)
-                            .onTapGesture { Task { await model.choose(paper: paper) } }
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            LibrarySidebar()
+                .navigationSplitViewColumnWidth(min: 190, ideal: 235, max: 310)
+        } detail: {
+            WorkspaceDetail()
+                .toolbar {
+                    ToolbarItem(placement: .navigation) {
+                        Button("Search Library", systemImage: "magnifyingglass") {
+                            model.showSearch()
+                        }
                     }
                 }
-                if !model.searchResults.isEmpty {
-                    Section("Zotero Library") {
-                        ForEach(model.searchResults) { result in
-                            PaperRow(
-                                title: result.title,
-                                authors: result.creators ?? [],
-                                year: result.year
-                            )
-                            .onTapGesture { Task { await model.open(searchResult: result) } }
+        }
+    }
+}
+
+struct LibrarySidebar: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        List {
+            Section {
+                SidebarButton(
+                    title: "Start Page",
+                    systemImage: "house",
+                    selected: model.route == .start,
+                    action: model.showStart
+                )
+                SidebarButton(
+                    title: "Recent",
+                    systemImage: "clock",
+                    selected: model.route == .recent,
+                    action: model.showRecent
+                )
+            }
+
+            Section("Recent papers") {
+                ForEach(model.recentPapers) { paper in
+                    Button {
+                        Task { await model.open(paper: paper) }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(paper.title)
+                                .font(.callout.weight(.medium))
+                                .lineLimit(2)
+                            Text(paperMetadata(paper.authors, paper.year))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(
+                        model.route == .paper(paper.id)
+                            ? Color.accentColor.opacity(0.14)
+                            : Color.clear
+                    )
+                }
+            }
+        }
+        .listStyle(.sidebar)
+        .navigationTitle("PaperChat")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button("Refresh Library", systemImage: "arrow.clockwise") {
+                        Task { await model.refreshLibrary() }
+                    }
+                    Divider()
+                    Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right") {
+                        Task { await model.signOut() }
+                    }
+                } label: {
+                    Label("Library actions", systemImage: "ellipsis.circle")
+                }
+            }
+        }
+    }
+}
+
+struct SidebarButton: View {
+    let title: String
+    let systemImage: String
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(selected ? Color.accentColor.opacity(0.14) : Color.clear)
+    }
+}
+
+struct WorkspaceDetail: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        ZStack {
+            switch model.route {
+            case .start:
+                StartPage()
+            case .recent:
+                RecentPage()
+            case .search:
+                LibrarySearchPage()
+            case .paper:
+                Color.platformBackground
+            }
+
+            ForEach(model.openSessions) { session in
+                ReaderWorkspace(session: session)
+                    .opacity(model.route == .paper(session.id) ? 1 : 0)
+                    .allowsHitTesting(model.route == .paper(session.id))
+                    .accessibilityHidden(model.route != .paper(session.id))
+                    .zIndex(model.route == .paper(session.id) ? 2 : 0)
+            }
+        }
+        .toolbar {
+            if let session = model.activeSession {
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 1) {
+                        Text(session.paper.title)
+                            .font(.headline)
+                            .lineLimit(1)
+                        Text(paperMetadata(session.paper.authors, session.paper.year))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: 520)
+                }
+                ToolbarItemGroup(placement: .primaryAction) {
+                    if let itemKey = session.paper.identifiers?
+                        .first(where: { $0.kind == "zotero_item" })?.value,
+                       let url = URL(string: "zotero://select/library/items/\(itemKey)") {
+                        Button("Open in Zotero", systemImage: "arrow.up.forward.app") {
+                            openURL(url)
+                        }
+                    }
+                    Button(
+                        session.isChatPresented ? "Hide Chat" : "Show Chat",
+                        systemImage: "sidebar.right"
+                    ) {
+                        withAnimation(.snappy(duration: 0.22)) {
+                            session.isChatPresented.toggle()
                         }
                     }
                 }
             }
-            .navigationTitle("Library")
-            .searchable(text: $query, prompt: "Search Zotero")
-            .onSubmit(of: .search) { Task { await model.search(query) } }
-            .toolbar {
-                ToolbarItem {
-                    Button("Refresh", systemImage: "arrow.clockwise") {
-                        Task { await model.loadRecent() }
-                    }
+        }
+    }
+}
+
+struct StartPage: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 28) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Image(systemName: "doc.text.magnifyingglass")
+                        .font(.system(size: 36))
+                        .foregroundStyle(.tint)
+                    Text("PaperChat")
+                        .font(.largeTitle.bold())
+                    Text("Continue reading, or search your Zotero library.")
+                        .foregroundStyle(.secondary)
                 }
-                ToolbarItem {
-                    Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right") {
-                        Task { await model.signOut() }
+
+                Button {
+                    model.showSearch()
+                } label: {
+                    Label("Search Library", systemImage: "magnifyingglass")
+                        .frame(maxWidth: 420, alignment: .leading)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+
+                if !model.recentPapers.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Continue Reading").font(.title2.bold())
+                            Spacer()
+                            Button("See All") { model.showRecent() }
+                        }
+                        ForEach(model.recentPapers.prefix(4)) { paper in
+                            PaperCard(paper: paper) {
+                                Task { await model.open(paper: paper) }
+                            }
+                        }
                     }
                 }
             }
-        } detail: {
-            if model.selectedPaper != nil { ReaderWorkspace() }
-            else {
+            .frame(maxWidth: 760, alignment: .leading)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 36)
+        }
+        .navigationTitle("Start Page")
+    }
+}
+
+struct RecentPage: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        Group {
+            if model.recentPapers.isEmpty {
                 ContentUnavailableView(
-                    "Choose a paper",
-                    systemImage: "doc.text",
-                    description: Text("Open a recent paper or search your Zotero library.")
+                    "No Recent Papers",
+                    systemImage: "clock",
+                    description: Text("Search your Zotero library to open a paper.")
                 )
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        ForEach(model.recentPapers) { paper in
+                            PaperCard(paper: paper) {
+                                Task { await model.open(paper: paper) }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: 820)
+                    .padding(24)
+                }
+            }
+        }
+        .navigationTitle("Recent")
+    }
+}
+
+struct PaperCard: View {
+    let paper: Paper
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: "doc.richtext")
+                    .font(.title2)
+                    .foregroundStyle(.tint)
+                    .frame(width: 34)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(paper.title)
+                        .font(.headline)
+                        .lineLimit(2)
+                    Text(paperMetadata(paper.authors, paper.year))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.bold())
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(14)
+            .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct LibrarySearchPage: View {
+    @EnvironmentObject private var model: AppModel
+
+    private var groups: [SearchPaperGroup] {
+        SearchPaperGroup.group(model.searchResults)
+    }
+
+    var body: some View {
+        Group {
+            if model.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                ContentUnavailableView(
+                    "Search Your Library",
+                    systemImage: "magnifyingglass",
+                    description: Text("Search by title, author, DOI, citekey, or text.")
+                )
+            } else if model.isSearching && groups.isEmpty {
+                ProgressView("Searching…")
+            } else if groups.isEmpty {
+                ContentUnavailableView.search(text: model.searchQuery)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        ForEach(groups) { group in
+                            Button {
+                                if let result = group.results.first(where: {
+                                    $0.usableAttachmentKey != nil
+                                }) {
+                                    Task { await model.open(searchResult: result) }
+                                }
+                            } label: {
+                                HStack(spacing: 14) {
+                                    Image(systemName: "doc.richtext")
+                                        .font(.title2)
+                                        .foregroundStyle(.tint)
+                                        .frame(width: 34)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(group.title)
+                                            .font(.headline)
+                                            .lineLimit(2)
+                                        Text(paperMetadata(group.creators, group.year))
+                                            .font(.subheadline)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                        if group.results.count > 1 {
+                                            Text("\(group.results.count) matching attachments")
+                                                .font(.caption)
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                    }
+                                    Spacer()
+                                }
+                                .padding(14)
+                                .background(
+                                    .quaternary.opacity(0.45),
+                                    in: RoundedRectangle(cornerRadius: 12)
+                                )
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .frame(maxWidth: 820)
+                    .padding(24)
+                }
+            }
+        }
+        .navigationTitle("Search")
+        .searchable(text: $model.searchQuery, prompt: "Search Zotero Library")
+        .task(id: model.searchQuery) {
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+                await model.search(model.searchQuery)
+            } catch {
+                return
             }
         }
     }
 }
 
-struct PaperRow: View {
+struct SearchPaperGroup: Identifiable {
+    let id: String
     let title: String
-    let authors: [Creator]
+    let creators: [Creator]
     let year: String?
+    let results: [LibrarySearchResult]
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.headline).lineLimit(2)
-            Text(
-                [authors.prefix(2).map(\.displayName).joined(separator: ", "), year]
-                    .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
+    static func group(_ results: [LibrarySearchResult]) -> [SearchPaperGroup] {
+        let grouped = Dictionary(grouping: results) {
+            "\($0.title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current))|\($0.year ?? "")"
         }
-        .padding(.vertical, 3)
+        return grouped.map { key, values in
+            let first = values[0]
+            return SearchPaperGroup(
+                id: key,
+                title: first.title,
+                creators: first.creators ?? [],
+                year: first.year,
+                results: values
+            )
+        }
+        .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
 }
 
 struct ReaderWorkspace: View {
-    @EnvironmentObject private var model: AppModel
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @Environment(\.openURL) private var openURL
+    @ObservedObject var session: PaperSession
 
     var body: some View {
-        Group {
-            if horizontalSizeClass == .compact {
-                TabView {
-                    PDFPane().tabItem { Label("Reader", systemImage: "doc.richtext") }
-                    ChatPane().tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
+        GeometryReader { geometry in
+            ReaderLayout(session: session, availableWidth: geometry.size.width)
+        }
+    }
+}
+
+struct ReaderLayout: View {
+    @ObservedObject var session: PaperSession
+    let availableWidth: CGFloat
+
+    private var usesOverlayChat: Bool { availableWidth < 820 }
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            if usesOverlayChat {
+                PDFPane(session: session)
+                if session.isChatPresented {
+                    Color.black.opacity(0.12)
+                        .ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(.snappy) { session.isChatPresented = false }
+                        }
+                    ChatPane(session: session)
+                        .frame(width: min(max(availableWidth * 0.88, 300), 430))
+                        .background(.regularMaterial)
+                        .shadow(color: .black.opacity(0.2), radius: 18, x: -5)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             } else {
-                #if os(macOS)
-                HSplitView {
-                    PDFPane().frame(minWidth: 420)
-                    ChatPane().frame(minWidth: 320, idealWidth: 420, maxWidth: 560)
-                }
-                #else
                 HStack(spacing: 0) {
-                    PDFPane().frame(minWidth: 420)
-                    Divider()
-                    ChatPane().frame(minWidth: 320, idealWidth: 420, maxWidth: 560)
-                }
-                #endif
-            }
-        }
-        .navigationTitle(model.selectedPaper?.title ?? "Paper")
-        .toolbar {
-            if let itemKey = model.selectedPaper?.identifiers?
-                .first(where: { $0.kind == "zotero_item" })?.value,
-               let url = URL(string: "zotero://select/library/items/\(itemKey)") {
-                Button("Open in Zotero", systemImage: "arrow.up.forward.app") {
-                    openURL(url)
+                    PDFPane(session: session)
+                        .frame(maxWidth: .infinity)
+                    if session.isChatPresented {
+                        ChatResizeHandle(session: session, totalWidth: availableWidth)
+                            .zIndex(10)
+                        ChatPane(session: session)
+                            .frame(width: min(session.chatWidth, availableWidth * 0.48))
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
                 }
             }
         }
+        .clipped()
+    }
+}
+
+struct ChatResizeHandle: View {
+    @ObservedObject var session: PaperSession
+    let totalWidth: CGFloat
+    @State private var dragStartWidth: CGFloat?
+
+    var body: some View {
+        ZStack {
+            Color.clear
+            Capsule()
+                .fill(.secondary.opacity(0.38))
+                .frame(width: 3, height: 42)
+        }
+        .frame(width: 18)
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            #if os(macOS)
+            if hovering { NSCursor.resizeLeftRight.push() }
+            else { NSCursor.pop() }
+            #endif
+        }
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    if dragStartWidth == nil { dragStartWidth = session.chatWidth }
+                    let proposed = (dragStartWidth ?? session.chatWidth) - value.translation.width
+                    session.chatWidth = min(max(proposed, 300), totalWidth * 0.55)
+                }
+                .onEnded { _ in dragStartWidth = nil }
+        )
     }
 }
 
 struct PDFPane: View {
     @EnvironmentObject private var model: AppModel
+    @ObservedObject var session: PaperSession
 
     var body: some View {
         Group {
-            if let url = model.pdfURL {
+            if let url = session.pdfURL {
                 PDFKitView(
                     url: url,
                     pageIndex: Binding(
-                        get: { model.pageIndex },
-                        set: { model.pageChanged($0) }
+                        get: { session.pageIndex },
+                        set: { model.pageChanged($0, in: session) }
                     ),
-                    selectedText: $model.selectedText
+                    zoomScale: Binding(
+                        get: { session.zoomScale },
+                        set: {
+                            model.pdfViewStateChanged(
+                                in: session,
+                                pageIndex: session.pageIndex,
+                                zoomScale: $0,
+                                scrollOffset: session.scrollOffset
+                            )
+                        }
+                    ),
+                    scrollOffset: Binding(
+                        get: { session.scrollOffset },
+                        set: {
+                            model.pdfViewStateChanged(
+                                in: session,
+                                pageIndex: session.pageIndex,
+                                zoomScale: session.zoomScale,
+                                scrollOffset: $0
+                            )
+                        }
+                    ),
+                    selectedText: $session.selectedText
                 )
             } else {
                 ProgressView("Downloading PDF…")
@@ -185,15 +571,19 @@ struct PDFPane: View {
         }
         .safeAreaInset(edge: .bottom) {
             HStack {
-                Text("Page \(model.pageIndex + 1)")
+                Text("Page \(session.pageIndex + 1)")
+                if session.zoomScale > 0 {
+                    Text("· \(Int(session.zoomScale * 100))%")
+                }
                 Spacer()
-                if let selection = model.selectedText, !selection.isEmpty {
+                if let selection = session.selectedText, !selection.isEmpty {
                     Label("Selection ready for chat", systemImage: "text.quote")
                         .foregroundStyle(.tint)
                 }
             }
             .font(.caption)
-            .padding(8)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
             .background(.bar)
         }
     }
@@ -201,93 +591,223 @@ struct PDFPane: View {
 
 struct ChatPane: View {
     @EnvironmentObject private var model: AppModel
+    @ObservedObject var session: PaperSession
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Picker("Thread", selection: $model.selectedThread) {
-                    ForEach(model.threads) { thread in Text(thread.title).tag(Optional(thread)) }
-                }
-                .pickerStyle(.menu)
-                .onChange(of: model.selectedThread) { _, thread in
-                    Task { await model.switchThread(to: thread) }
-                }
-                Spacer()
-                Button("New Thread", systemImage: "plus") {
-                    Task { await model.createThread() }
-                }
-                .labelStyle(.iconOnly)
+        Group {
+            switch session.chatRoute {
+            case .list:
+                ChatListView(session: session)
+            case .conversation:
+                ConversationView(session: session)
             }
-            .padding()
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ForEach(model.messages) { message in
-                            MessageBubble(message: message)
-                                .id(message.id)
-                        }
-                    }
-                    .padding()
-                }
-                .onChange(of: model.messages.count) {
-                    if let last = model.messages.last {
-                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
-                    }
-                }
-            }
-            Divider()
-            VStack(alignment: .leading, spacing: 8) {
-                if let selected = model.selectedText, !selected.isEmpty {
-                    Text("“\(selected)”")
-                        .font(.caption)
-                        .lineLimit(2)
-                        .foregroundStyle(.secondary)
-                }
-                HStack(alignment: .bottom) {
-                    TextField("Ask about page \(model.pageIndex + 1)…", text: $model.draft, axis: .vertical)
-                        .textFieldStyle(.roundedBorder)
-                        .lineLimit(1...6)
-                        .onSubmit { Task { await model.send() } }
-                    Button("Send", systemImage: "arrow.up.circle.fill") {
-                        Task { await model.send() }
-                    }
-                    .labelStyle(.iconOnly)
-                    .font(.title2)
-                    .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-            .padding()
         }
         .background(Color.platformBackground)
     }
 }
 
+struct ChatListView: View {
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject var session: PaperSession
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Chats").font(.headline)
+                Spacer()
+                Button("New Chat", systemImage: "square.and.pencil") {
+                    Task { await model.createThread(in: session) }
+                }
+                .labelStyle(.iconOnly)
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 48)
+            Divider()
+
+            if session.threads.isEmpty {
+                ContentUnavailableView(
+                    "No Chats Yet",
+                    systemImage: "bubble.left.and.bubble.right",
+                    description: Text("Start a chat about this paper.")
+                )
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 3) {
+                        ForEach(session.threads) { thread in
+                            Button {
+                                Task { await model.switchThread(thread, in: session) }
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "bubble.left")
+                                        .foregroundStyle(.secondary)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(thread.title)
+                                            .font(.callout.weight(.medium))
+                                            .lineLimit(1)
+                                        Text(thread.lastUsedAt)
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption.bold())
+                                        .foregroundStyle(.tertiary)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(6)
+                }
+            }
+        }
+    }
+}
+
+struct ConversationView: View {
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject var session: PaperSession
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button("All Chats", systemImage: "chevron.left") {
+                    model.showChatList(session)
+                }
+                .labelStyle(.iconOnly)
+                Text(session.selectedThread?.title ?? "Chat")
+                    .font(.headline)
+                    .lineLimit(1)
+                Spacer()
+                Button("New Chat", systemImage: "square.and.pencil") {
+                    Task { await model.createThread(in: session) }
+                }
+                .labelStyle(.iconOnly)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 48)
+            Divider()
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 11) {
+                        ForEach(session.messages) { message in
+                            MessageBubble(message: message, session: session)
+                                .id(message.id)
+                        }
+                    }
+                    .padding(12)
+                }
+                .onChange(of: session.messages.count) {
+                    if let last = session.messages.last {
+                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                }
+            }
+
+            Divider()
+            ChatComposer(session: session)
+        }
+    }
+}
+
+struct ChatComposer: View {
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject var session: PaperSession
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            if let selected = session.selectedText, !selected.isEmpty {
+                Text("“\(selected)”")
+                    .font(.caption)
+                    .lineLimit(2)
+                    .foregroundStyle(.secondary)
+            }
+            HStack {
+                Menu {
+                    if model.models.isEmpty {
+                        Text("Server default")
+                    } else {
+                        ForEach(model.models) { option in
+                            Button {
+                                model.selectedModelID = option.id
+                            } label: {
+                                if model.selectedModelID == option.id {
+                                    Label(option.displayName, systemImage: "checkmark")
+                                } else {
+                                    Text(option.displayName)
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(model.selectedModel?.displayName ?? "Default model")
+                            .lineLimit(1)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption2)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            HStack(alignment: .bottom) {
+                TextField(
+                    "Ask about page \(session.pageIndex + 1)…",
+                    text: $session.draft,
+                    axis: .vertical
+                )
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(1...6)
+                .onSubmit { Task { await model.send(in: session) } }
+                Button("Send", systemImage: "arrow.up.circle.fill") {
+                    Task { await model.send(in: session) }
+                }
+                .labelStyle(.iconOnly)
+                .font(.title2)
+                .disabled(session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(10)
+    }
+}
+
 struct MessageBubble: View {
     let message: ChatMessage
+    @ObservedObject var session: PaperSession
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         HStack {
-            if message.role == "user" { Spacer(minLength: 40) }
-            VStack(alignment: .leading, spacing: 8) {
+            if message.role == "user" { Spacer(minLength: 32) }
+            VStack(alignment: .leading, spacing: 7) {
                 Text(message.content.isEmpty ? "…" : message.content)
                     .textSelection(.enabled)
                 if message.role == "assistant", !citedPages.isEmpty {
                     HStack {
                         ForEach(citedPages, id: \.self) { page in
-                            Button("p. \(page)") { model.pageChanged(page - 1) }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
+                            Button("p. \(page)") {
+                                model.pageChanged(page - 1, in: session)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
                         }
                     }
                 }
             }
-            .padding(12)
+            .padding(10)
             .background(
-                message.role == "user" ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.12),
-                in: RoundedRectangle(cornerRadius: 14)
+                message.role == "user"
+                    ? Color.accentColor.opacity(0.18)
+                    : Color.secondary.opacity(0.12),
+                in: RoundedRectangle(cornerRadius: 12)
             )
-            if message.role != "user" { Spacer(minLength: 40) }
+            if message.role != "user" { Spacer(minLength: 32) }
         }
     }
 
@@ -302,7 +822,14 @@ struct MessageBubble: View {
     }
 }
 
-private extension Color {
+private func paperMetadata(_ authors: [Creator], _ year: String?) -> String {
+    [authors.prefix(3).map(\.displayName).filter { !$0.isEmpty }.joined(separator: ", "), year]
+        .compactMap { $0 }
+        .filter { !$0.isEmpty }
+        .joined(separator: " · ")
+}
+
+extension Color {
     static var platformBackground: Color {
         #if os(macOS)
         Color(nsColor: .windowBackgroundColor)

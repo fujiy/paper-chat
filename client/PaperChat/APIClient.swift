@@ -40,6 +40,11 @@ actor APIClient {
         return response.results
     }
 
+    func models() async throws -> [ModelOption] {
+        let response: ModelListResponse = try await request("api/models")
+        return response.models
+    }
+
     func resolve(attachmentKey: String) async throws -> Paper {
         try await request(
             "api/papers/resolve",
@@ -67,10 +72,18 @@ actor APIClient {
     }
 
     func saveReadingState(
-        paperID: String, pageIndex: Int, activeThreadID: String?
+        paperID: String,
+        pageIndex: Int,
+        scrollOffset: Double,
+        zoomScale: Double,
+        displayMode: String,
+        activeThreadID: String?
     ) async throws {
         let body: [String: AnyEncodable] = [
             "page_index": AnyEncodable(pageIndex),
+            "scroll_offset": AnyEncodable(scrollOffset),
+            "zoom_scale": AnyEncodable(zoomScale),
+            "display_mode": AnyEncodable(displayMode),
             "active_thread_id": AnyEncodable(activeThreadID),
         ]
         let _: UpdatedAt = try await request(
@@ -97,7 +110,8 @@ actor APIClient {
         threadID: String,
         content: String,
         pageIndex: Int,
-        selectedText: String?
+        selectedText: String?,
+        model: String?
     ) -> AsyncThrowingStream<StreamEvent, Error> {
         AsyncThrowingStream { continuation in
             Task {
@@ -110,6 +124,7 @@ actor APIClient {
                         "current_page_index": pageIndex,
                         "selected_text": (selectedText ?? NSNull()) as Any,
                         "client_request_id": UUID().uuidString,
+                        "model": (model ?? NSNull()) as Any,
                     ])
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     var result = try await session.bytes(for: request)
@@ -163,7 +178,11 @@ actor APIClient {
         }
         let (data, response) = try await data(for: request, authenticated: authenticated)
         try validate(response: response, data: data)
-        return try JSONDecoder.paperChat.decode(Response.self, from: data)
+        do {
+            return try JSONDecoder.paperChat.decode(Response.self, from: data)
+        } catch let error as DecodingError {
+            throw APIError.decoding(Self.describe(error))
+        }
     }
 
     private func data(
@@ -252,12 +271,36 @@ actor APIClient {
             )
         }
     }
+
+    private static func describe(_ error: DecodingError) -> String {
+        let context: DecodingError.Context
+        let detail: String
+        switch error {
+        case let .typeMismatch(type, value):
+            context = value
+            detail = "Expected \(type)"
+        case let .valueNotFound(type, value):
+            context = value
+            detail = "Missing \(type)"
+        case let .keyNotFound(key, value):
+            context = value
+            detail = "Missing key \(key.stringValue)"
+        case let .dataCorrupted(value):
+            context = value
+            detail = "Corrupt data"
+        @unknown default:
+            return error.localizedDescription
+        }
+        let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+        let location = path.isEmpty ? "<root>" : path
+        return "\(detail) at \(location): \(context.debugDescription)"
+    }
 }
 
 private struct UpdatedAt: Decodable { let updatedAt: String }
 
 enum APIError: LocalizedError {
-    case invalidURL, invalidResponse, unauthorized, http(Int), server(Int, String)
+    case invalidURL, invalidResponse, unauthorized, http(Int), server(Int, String), decoding(String)
 
     var errorDescription: String? {
         switch self {
@@ -266,6 +309,7 @@ enum APIError: LocalizedError {
         case .unauthorized: "Sign in to continue."
         case let .http(status): "Request failed (\(status))."
         case let .server(status, detail): "Server error \(status): \(detail)"
+        case let .decoding(detail): "The server response could not be decoded. \(detail)"
         }
     }
 }

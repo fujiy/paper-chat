@@ -1,8 +1,9 @@
 // !$*UTF8*$!
 {
 	archiveVersion = 1;
-	classes = {};
-	objectVersion = 77;
+	classes = {
+	};
+	objectVersion = 71;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -99,8 +100,10 @@
 				A30000000000000000000001 /* Frameworks */,
 				A70000000000000000000001 /* Resources */,
 			);
-			buildRules = ();
-			dependencies = ();
+			buildRules = (
+			);
+			dependencies = (
+			);
 			name = PaperChat;
 			productName = PaperChat;
 			productReference = A20000000000000000000012 /* PaperChat.app */;
@@ -116,20 +119,26 @@
 				LastSwiftUpdateCheck = 2630;
 				LastUpgradeCheck = 2630;
 				TargetAttributes = {
-					A50000000000000000000001 = { CreatedOnToolsVersion = 26.3; };
+					A50000000000000000000001 = {
+						CreatedOnToolsVersion = 26.3;
+					};
 				};
 			};
 			buildConfigurationList = A90000000000000000000001 /* Build configuration list for PBXProject "PaperChat" */;
 			compatibilityVersion = "Xcode 16.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
-			knownRegions = (en, Base);
+			knownRegions = (
+				en,
+				Base,
+			);
 			mainGroup = A40000000000000000000001;
-			preferredProjectObjectVersion = 77;
 			productRefGroup = A40000000000000000000004 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
-			targets = (A50000000000000000000001 /* PaperChat */);
+			targets = (
+				A50000000000000000000001 /* PaperChat */,
+			);
 		};
 /* End PBXProject section */
 
@@ -137,7 +146,8 @@
 		A70000000000000000000001 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
-			files = ();
+			files = (
+			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
@@ -188,6 +198,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 4C4TXA6S8J;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = PaperChat/Info.plist;
@@ -211,6 +222,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 4C4TXA6S8J;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = PaperChat/Info.plist;
@@ -233,13 +245,19 @@
 /* Begin XCConfigurationList section */
 		A90000000000000000000001 /* Build configuration list for PBXProject "PaperChat" */ = {
 			isa = XCConfigurationList;
-			buildConfigurations = (AA0000000000000000000001, AA0000000000000000000002);
+			buildConfigurations = (
+				AA0000000000000000000001 /* Debug */,
+				AA0000000000000000000002 /* Release */,
+			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 		A90000000000000000000002 /* Build configuration list for PBXNativeTarget "PaperChat" */ = {
 			isa = XCConfigurationList;
-			buildConfigurations = (AA0000000000000000000003, AA0000000000000000000004);
+			buildConfigurations = (
+				AA0000000000000000000003 /* Debug */,
+				AA0000000000000000000004 /* Release */,
+			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
