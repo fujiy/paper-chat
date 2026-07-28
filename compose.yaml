@@ -4,6 +4,7 @@ services:
   paperchat-api:
     build:
       context: .
+      target: runtime
       args:
         CODEX_VERSION: ${CODEX_VERSION:-0.145.0}
     restart: unless-stopped
@@ -15,6 +16,7 @@ services:
       ZOTERO_SERVICE_TOKEN_FILE: /run/secrets/zotero_service_token
       LLM_BACKEND: ${LLM_BACKEND:-codex}
       CODEX_HOME_DIR: /data/codex/home
+      CODEX_HOME: /data/codex/home
       CODEX_WORKSPACE: /data/codex/workspace
       CODEX_MODEL: ${CODEX_MODEL:-}
     volumes:

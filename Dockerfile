@@ -19,3 +19,9 @@ USER paperchat
 ENV PATH="/app/.venv/bin:${PATH}"
 EXPOSE 8000
 CMD ["paperchat-api"]
+
+FROM runtime AS test
+USER root
+RUN uv sync --frozen
+USER paperchat
+CMD ["/app/.venv/bin/pytest"]

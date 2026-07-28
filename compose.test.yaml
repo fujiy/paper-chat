@@ -1,7 +1,17 @@
 services:
   paperchat-api:
+    image: paperchat-api-test
     build:
-      target: runtime
+      target: test
+    command: ["/app/.venv/bin/pytest"]
+    depends_on: !reset {}
     environment:
+      BOOTSTRAP_TOKEN: test-bootstrap-token
+      ZOTERO_SERVICE_TOKEN: test-zotero-service-token
       LLM_BACKEND: fake
+    ports: !reset []
+    volumes: !override
+      - paperchat_test_data:/data
 
+volumes:
+  paperchat_test_data:

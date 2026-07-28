@@ -33,9 +33,8 @@ xcodebuild -project client/PaperChat.xcodeproj -scheme PaperChat \
 サーバーのDockerテストでは実Codex資格情報を使いません。
 
 ```sh
-./scripts/prepare-secrets.sh
-docker volume create paperchat_secrets
-docker compose -f compose.yaml -f compose.test.yaml up --build
+docker compose -f compose.yaml -f compose.test.yaml \
+  run --build --rm --no-deps paperchat-api
 ```
 
 ## 既存Zotero環境からのデプロイ
@@ -73,11 +72,22 @@ PAPERCHAT_PUBLIC_BASE_URL=http://server.local:8001 \
 デプロイ先で対話的なdevice authを行うのが安全です。
 
 ```sh
-docker exec -it paperchat-paperchat-api-1 codex login --device-auth
-docker exec paperchat-paperchat-api-1 codex login status
+docker exec -it -e CODEX_HOME=/data/codex/home \
+  paperchat-paperchat-api-1 codex login --device-auth
+docker exec -e CODEX_HOME=/data/codex/home \
+  paperchat-paperchat-api-1 codex login status
 ```
 
 認証後、`LLM_BACKEND=codex`でPaperChat APIを再作成します。通常のE2E検証だけなら`LLM_BACKEND=fake`を使用できます。
+
+実論文の本文を送らずに、Codex接続・ストリーミング・thread再開だけを確認できます。
+
+```sh
+docker exec -i paperchat-paperchat-api-1 /app/.venv/bin/python - \
+  < scripts/codex-smoke-test.py
+```
+
+実論文を使ったCodex E2E試験は、PDF本文がOpenAIへ送信されることを確認したうえで実行してください。
 
 ## アプリの接続
 

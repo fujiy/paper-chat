@@ -10,7 +10,6 @@ import urllib.parse
 import urllib.request
 import uuid
 
-
 base_url = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000"
 attachment_key = sys.argv[2] if len(sys.argv) > 2 else "26MBZCQC"
 
@@ -43,9 +42,8 @@ def expect(status: int, expected: int, body: bytes) -> None:
         raise RuntimeError(f"expected HTTP {expected}, got {status}: {body[:500]!r}")
 
 
-bootstrap_token = open(
-    "/run/secrets/paperchat_bootstrap_token", encoding="utf-8"
-).read().strip()
+with open("/run/secrets/paperchat_bootstrap_token", encoding="utf-8") as secret_file:
+    bootstrap_token = secret_file.read().strip()
 status, _, body = request(
     "POST",
     "/api/auth/register",
@@ -135,10 +133,22 @@ status, _, body = request(
     payload={"refresh_token": tokens["refresh_token"]},
 )
 expect(status, 200, body)
+refreshed_tokens = json.loads(body)
 status, _, body = request(
     "POST",
     "/api/auth/refresh",
     payload={"refresh_token": tokens["refresh_token"]},
+)
+expect(status, 401, body)
+
+status, _, body = request(
+    "DELETE",
+    f"/api/sessions/{refreshed_tokens['session_id']}",
+    token=refreshed_tokens["access_token"],
+)
+expect(status, 204, body)
+status, _, body = request(
+    "GET", "/api/papers/recent", token=refreshed_tokens["access_token"]
 )
 expect(status, 401, body)
 
@@ -151,6 +161,7 @@ print(
             "sse_events": events,
             "persisted_messages": len(messages),
             "refresh_rotation": "ok",
+            "session_revocation": "ok",
         },
         ensure_ascii=False,
     )
