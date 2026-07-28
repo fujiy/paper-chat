@@ -23,6 +23,7 @@ class FakeBackend:
         prompt: str,
         backend_thread_id: str | None = None,
         model: str | None = None,
+        effort: str | None = None,
     ) -> AsyncIterator[LLMEvent]:
         thread_id = backend_thread_id or "fake-thread"
         yield LLMEvent("thread", backend_thread_id=thread_id)
@@ -40,6 +41,12 @@ class FakeBackend:
                 "display_name": "Fake (testing)",
                 "description": "Deterministic test backend",
                 "is_default": True,
+                "default_reasoning_effort": "medium",
+                "supported_reasoning_efforts": [
+                    {"reasoning_effort": "low", "description": "Fast"},
+                    {"reasoning_effort": "medium", "description": "Balanced"},
+                    {"reasoning_effort": "high", "description": "Thorough"},
+                ],
             }
         ]
 
@@ -55,6 +62,7 @@ class CodexBackend:
         prompt: str,
         backend_thread_id: str | None = None,
         model: str | None = None,
+        effort: str | None = None,
     ) -> AsyncIterator[LLMEvent]:
         env = {**os.environ, "CODEX_HOME": str(self.settings.codex_home)}
         process = await asyncio.create_subprocess_exec(
@@ -137,6 +145,8 @@ class CodexBackend:
             }
             if model:
                 turn_params["model"] = model
+            if effort:
+                turn_params["effort"] = effort
             turn_request = await send("turn/start", turn_params)
             turn_result = await response(turn_request)
             turn_id = turn_result["turn"]["id"]
@@ -208,6 +218,14 @@ class CodexBackend:
                     "display_name": item["displayName"],
                     "description": item["description"],
                     "is_default": item["isDefault"],
+                    "default_reasoning_effort": item["defaultReasoningEffort"],
+                    "supported_reasoning_efforts": [
+                        {
+                            "reasoning_effort": option["reasoningEffort"],
+                            "description": option["description"],
+                        }
+                        for option in item["supportedReasoningEfforts"]
+                    ],
                 }
                 for item in result.get("data", [])
             ]

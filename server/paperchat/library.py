@@ -22,6 +22,16 @@ class ZoteroLibrary:
             response.raise_for_status()
             return response.json()
 
+    async def papers(self, limit: int = 500, offset: int = 0) -> dict:
+        async with httpx.AsyncClient(base_url=self.settings.zotero_library_url) as client:
+            response = await client.get(
+                "/internal/papers",
+                params={"limit": limit, "offset": offset},
+                headers=self.headers,
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def metadata(self, attachment_key: str) -> dict:
         async with httpx.AsyncClient(base_url=self.settings.zotero_library_url) as client:
             response = await client.get(

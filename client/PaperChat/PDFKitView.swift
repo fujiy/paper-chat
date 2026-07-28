@@ -8,11 +8,12 @@ struct PDFKitView: NSViewRepresentable {
     @Binding var zoomScale: Double
     @Binding var scrollOffset: Double
     @Binding var selectedText: String?
+    let highlightTarget: PDFHighlightTarget?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> PDFView {
-        let view = PDFView()
+        let view = PaperPDFView()
         configure(view, coordinator: context.coordinator)
         return view
     }
@@ -29,6 +30,7 @@ struct PDFKitView: UIViewRepresentable {
     @Binding var zoomScale: Double
     @Binding var scrollOffset: Double
     @Binding var selectedText: String?
+    let highlightTarget: PDFHighlightTarget?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -75,6 +77,7 @@ extension PDFKitView {
             coordinator.lastScale = view.scaleFactor
             coordinator.isRestoring = false
         }
+        coordinator.applyHighlight(highlightTarget)
     }
 
     private func loadDocument(in view: PDFView, coordinator: Coordinator) {
@@ -86,8 +89,7 @@ extension PDFKitView {
         view.layoutIfNeeded()
         #endif
         let fitScale = max(view.scaleFactorForSizeToFit, 0.1)
-        view.minScaleFactor = fitScale * 0.5
-        view.maxScaleFactor = fitScale * 8
+        setScaleRange(in: view, fitScale: fitScale)
         view.scaleFactor = zoomScale > 0 ? zoomScale : fitScale
         if let page = view.document?.page(at: pageIndex) {
             view.go(to: page)
@@ -99,8 +101,7 @@ extension PDFKitView {
         DispatchQueue.main.async {
             coordinator.isRestoring = true
             let laidOutFitScale = max(view.scaleFactorForSizeToFit, 0.1)
-            view.minScaleFactor = laidOutFitScale * 0.5
-            view.maxScaleFactor = laidOutFitScale * 8
+            setScaleRange(in: view, fitScale: laidOutFitScale)
             if zoomScale <= 0 {
                 view.scaleFactor = laidOutFitScale
                 coordinator.lastScale = view.scaleFactor
@@ -108,7 +109,20 @@ extension PDFKitView {
             coordinator.restoreScrollOffset(scrollOffset)
             coordinator.isRestoring = false
             coordinator.syncState()
+            coordinator.applyHighlight(highlightTarget)
         }
+    }
+
+    private func setScaleRange(in view: PDFView, fitScale: Double) {
+        let minimum = fitScale * 0.5
+        let maximum = fitScale * 8
+
+        // Expand the existing range first so neither setter can temporarily
+        // leave PDFKit with minMagnification greater than maxMagnification.
+        view.minScaleFactor = min(view.minScaleFactor, minimum)
+        view.maxScaleFactor = max(view.maxScaleFactor, maximum)
+        view.minScaleFactor = minimum
+        view.maxScaleFactor = maximum
     }
 
     @MainActor
@@ -118,6 +132,7 @@ extension PDFKitView {
         var isRestoring = false
         var lastPageIndex = -1
         var lastScale: Double = -1
+        var lastHighlightToken: UUID?
         nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
         #if !os(macOS)
         private var scrollObservation: NSKeyValueObservation?
@@ -163,6 +178,35 @@ extension PDFKitView {
 
         private func syncSelection() {
             parent.selectedText = view?.currentSelection?.string
+        }
+
+        func applyHighlight(_ target: PDFHighlightTarget?) {
+            guard let target,
+                  target.token != lastHighlightToken,
+                  let view,
+                  let document = view.document else { return }
+            let matches = document.findString(
+                target.query,
+                withOptions: [.caseInsensitive, .diacriticInsensitive]
+            )
+            .filter { selection in
+                selection.pages.contains(where: { document.index(for: $0) == target.pageIndex })
+            }
+            guard matches.indices.contains(target.occurrenceIndex) else { return }
+            let selection = matches[target.occurrenceIndex]
+            lastHighlightToken = target.token
+            #if os(macOS)
+            selection.color = NSColor.systemYellow.withAlphaComponent(0.58)
+            #else
+            selection.color = UIColor.systemYellow.withAlphaComponent(0.58)
+            #endif
+            view.highlightedSelections = [selection]
+            view.go(to: selection)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(2.5))
+                guard self?.lastHighlightToken == target.token else { return }
+                self?.view?.highlightedSelections = nil
+            }
         }
 
         #if os(macOS)
@@ -222,6 +266,15 @@ extension PDFKitView {
         }
     }
 }
+
+#if os(macOS)
+private final class PaperPDFView: PDFView {
+    override func resetCursorRects() {
+        discardCursorRects()
+        addCursorRect(bounds, cursor: .arrow)
+    }
+}
+#endif
 
 #if !os(macOS)
 private extension UIView {

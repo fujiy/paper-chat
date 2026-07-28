@@ -66,7 +66,6 @@ struct SignInView: View {
 }
 
 struct LibraryWorkspace: View {
-    @EnvironmentObject private var model: AppModel
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
 
     var body: some View {
@@ -75,13 +74,6 @@ struct LibraryWorkspace: View {
                 .navigationSplitViewColumnWidth(min: 190, ideal: 235, max: 310)
         } detail: {
             WorkspaceDetail()
-                .toolbar {
-                    ToolbarItem(placement: .navigation) {
-                        Button("Search Library", systemImage: "magnifyingglass") {
-                            model.showSearch()
-                        }
-                    }
-                }
         }
     }
 }
@@ -91,49 +83,39 @@ struct LibrarySidebar: View {
 
     var body: some View {
         List {
-            Section {
-                SidebarButton(
-                    title: "Start Page",
-                    systemImage: "house",
-                    selected: model.route == .start,
-                    action: model.showStart
-                )
-                SidebarButton(
-                    title: "Recent",
-                    systemImage: "clock",
-                    selected: model.route == .recent,
-                    action: model.showRecent
-                )
-            }
-
-            Section("Recent papers") {
-                ForEach(model.recentPapers) { paper in
-                    Button {
-                        Task { await model.open(paper: paper) }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(paper.title)
-                                .font(.callout.weight(.medium))
-                                .lineLimit(2)
-                            Text(paperMetadata(paper.authors, paper.year))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .listRowBackground(
-                        model.route == .paper(paper.id)
-                            ? Color.accentColor.opacity(0.14)
-                            : Color.clear
-                    )
-                }
-            }
+            SidebarButton(
+                title: "Start",
+                systemImage: "house",
+                selected: model.route == .start
+            ) { model.navigate(to: .start, fromSidebar: true) }
+            SidebarButton(
+                title: "Search",
+                systemImage: "magnifyingglass",
+                selected: model.route == .search
+            ) { model.navigate(to: .search, fromSidebar: true) }
+            SidebarButton(
+                title: "All Papers",
+                systemImage: "books.vertical",
+                selected: model.route == .allPapers
+            ) { model.navigate(to: .allPapers, fromSidebar: true) }
+            SidebarButton(
+                title: "Recent",
+                systemImage: "clock",
+                selected: model.route == .recent
+            ) { model.navigate(to: .recent, fromSidebar: true) }
+            SidebarButton(
+                title: "Starred",
+                systemImage: "star",
+                selected: model.route == .starred
+            ) { model.navigate(to: .starred, fromSidebar: true) }
+            SidebarButton(
+                title: "Chats",
+                systemImage: "bubble.left.and.bubble.right",
+                selected: model.route == .chats
+            ) { model.navigate(to: .chats, fromSidebar: true) }
         }
         .listStyle(.sidebar)
-        .navigationTitle("PaperChat")
+        .navigationTitle("")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
@@ -178,10 +160,26 @@ struct WorkspaceDetail: View {
             switch model.route {
             case .start:
                 StartPage()
-            case .recent:
-                RecentPage()
             case .search:
                 LibrarySearchPage()
+            case .allPapers:
+                AllPapersPage()
+            case .recent:
+                PaperListPage(
+                    title: "Recent",
+                    emptyTitle: "No Recent Papers",
+                    emptyIcon: "clock",
+                    papers: model.recentPapers
+                )
+            case .starred:
+                PaperListPage(
+                    title: "Starred",
+                    emptyTitle: "No Starred Papers",
+                    emptyIcon: "star",
+                    papers: model.starredPapers
+                )
+            case .chats:
+                ChatsPage()
             case .paper:
                 Color.platformBackground
             }
@@ -195,20 +193,30 @@ struct WorkspaceDetail: View {
             }
         }
         .toolbar {
-            if let session = model.activeSession {
-                ToolbarItem(placement: .principal) {
-                    VStack(spacing: 1) {
-                        Text(session.paper.title)
-                            .font(.headline)
-                            .lineLimit(1)
-                        Text(paperMetadata(session.paper.authors, session.paper.year))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+            if !model.navigationHistory.isEmpty {
+                ToolbarItem(placement: .navigation) {
+                    Button("Back", systemImage: "chevron.left") {
+                        model.goBack()
                     }
-                    .frame(maxWidth: 520)
+                    .labelStyle(.iconOnly)
                 }
+            }
+            ToolbarItem(placement: .principal) {
+                WorkspaceHeader()
+            }
+            if let session = model.activeSession {
                 ToolbarItemGroup(placement: .primaryAction) {
+                    Button(
+                        session.paper.isStarred ? "Unstar" : "Star",
+                        systemImage: session.paper.isStarred ? "star.fill" : "star"
+                    ) {
+                        Task { await model.toggleStar(in: session) }
+                    }
+                    Button("Find in PDF", systemImage: "magnifyingglass") {
+                        withAnimation(.snappy) {
+                            session.isPDFSearchPresented.toggle()
+                        }
+                    }
                     if let itemKey = session.paper.identifiers?
                         .first(where: { $0.kind == "zotero_item" })?.value,
                        let url = URL(string: "zotero://select/library/items/\(itemKey)") {
@@ -221,7 +229,11 @@ struct WorkspaceDetail: View {
                         systemImage: "sidebar.right"
                     ) {
                         withAnimation(.snappy(duration: 0.22)) {
-                            session.isChatPresented.toggle()
+                            if session.isChatPresented {
+                                session.isChatPresented = false
+                            } else {
+                                model.presentChat(in: session)
+                            }
                         }
                     }
                 }
@@ -230,8 +242,58 @@ struct WorkspaceDetail: View {
     }
 }
 
+struct WorkspaceHeader: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        if let session = model.activeSession {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    Text(session.paper.title)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Text(paperMetadata(session.paper.authors, session.paper.year))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+                HStack(spacing: 7) {
+                    Text(session.paper.title)
+                        .font(.headline)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Text(compactPaperMetadata(session.paper.authors, session.paper.year))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+            }
+            .frame(maxWidth: 700, alignment: .leading)
+        } else {
+            Text(pageTitle)
+                .font(.headline)
+                .frame(maxWidth: 700, alignment: .leading)
+        }
+    }
+
+    private var pageTitle: String {
+        switch model.route {
+        case .start: "Start"
+        case .search: "Search"
+        case .allPapers: "All Papers"
+        case .recent: "Recent"
+        case .starred: "Starred"
+        case .chats: "Chats"
+        case .paper: ""
+        }
+    }
+}
+
 struct StartPage: View {
     @EnvironmentObject private var model: AppModel
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         ScrollView {
@@ -246,21 +308,24 @@ struct StartPage: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Button {
-                    model.showSearch()
-                } label: {
-                    Label("Search Library", systemImage: "magnifyingglass")
-                        .frame(maxWidth: 420, alignment: .leading)
+                SearchField(
+                    text: $model.searchQuery,
+                    prompt: "Search title, author, DOI, citekey, or full text"
+                )
+                .focused($searchFocused)
+                .frame(maxWidth: 620)
+                .onChange(of: searchFocused) {
+                    if searchFocused {
+                        model.navigate(to: .search)
+                    }
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
 
                 if !model.recentPapers.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Text("Continue Reading").font(.title2.bold())
                             Spacer()
-                            Button("See All") { model.showRecent() }
+                            Button("See All") { model.navigate(to: .recent) }
                         }
                         ForEach(model.recentPapers.prefix(4)) { paper in
                             PaperCard(paper: paper) {
@@ -270,40 +335,260 @@ struct StartPage: View {
                     }
                 }
             }
-            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: 800, alignment: .leading)
             .padding(.horizontal, 28)
             .padding(.vertical, 36)
         }
-        .navigationTitle("Start Page")
     }
 }
 
-struct RecentPage: View {
-    @EnvironmentObject private var model: AppModel
+struct SearchField: View {
+    @Binding var text: String
+    let prompt: String
 
     var body: some View {
-        Group {
-            if model.recentPapers.isEmpty {
-                ContentUnavailableView(
-                    "No Recent Papers",
-                    systemImage: "clock",
-                    description: Text("Search your Zotero library to open a paper.")
-                )
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 10) {
-                        ForEach(model.recentPapers) { paper in
-                            PaperCard(paper: paper) {
-                                Task { await model.open(paper: paper) }
+        HStack(spacing: 9) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField(prompt, text: $text)
+                .textFieldStyle(.plain)
+            if !text.isEmpty {
+                Button("Clear", systemImage: "xmark.circle.fill") { text = "" }
+                    .labelStyle(.iconOnly)
+                    .foregroundStyle(.tertiary)
+                    .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 13)
+        .frame(height: 42)
+        .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.secondary.opacity(0.32), lineWidth: 0.5)
+        }
+    }
+}
+
+struct LibrarySearchPage: View {
+    @EnvironmentObject private var model: AppModel
+    @FocusState private var searchFocused: Bool
+
+    private var groups: [SearchPaperGroup] {
+        SearchPaperGroup.group(model.searchResults)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            SearchField(
+                text: $model.searchQuery,
+                prompt: "Search title, author, DOI, citekey, or full text"
+            )
+            .focused($searchFocused)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
+
+            Divider()
+
+            Group {
+                if model.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    ContentUnavailableView(
+                        "Search Your Library",
+                        systemImage: "magnifyingglass",
+                        description: Text("Results include matching passages from your PDFs.")
+                    )
+                } else if model.isSearching && groups.isEmpty {
+                    ProgressView("Searching…")
+                } else if groups.isEmpty {
+                    ContentUnavailableView.search(text: model.searchQuery)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 18) {
+                            ForEach(groups) { group in
+                                SearchPaperSection(group: group, query: model.searchQuery)
                             }
                         }
+                        .frame(maxWidth: 860)
+                        .padding(24)
                     }
-                    .frame(maxWidth: 820)
-                    .padding(24)
                 }
             }
         }
-        .navigationTitle("Recent")
+        .onAppear { searchFocused = true }
+        .onChange(of: model.searchFocusToken) { searchFocused = true }
+        .task(id: model.searchQuery) {
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+                await model.search(model.searchQuery)
+            } catch {
+                return
+            }
+        }
+    }
+}
+
+struct SearchPaperSection: View {
+    @EnvironmentObject private var model: AppModel
+    let group: SearchPaperGroup
+    let query: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(group.title)
+                    .font(.headline)
+                    .lineLimit(2)
+                Text(paperMetadata(group.creators, group.year))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(14)
+
+            Divider()
+
+            ForEach(group.results) { result in
+                Button {
+                    Task { await model.open(searchResult: result) }
+                } label: {
+                    HStack(alignment: .top, spacing: 12) {
+                        Text("p. \(result.matchedPage ?? result.pageStart ?? 1)")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .frame(width: 42, alignment: .leading)
+                        HighlightedSnippet(
+                            text: result.snippet ?? result.title,
+                            query: query
+                        )
+                        .font(.callout)
+                        .lineLimit(4)
+                        Spacer(minLength: 4)
+                        Image(systemName: "arrow.right")
+                            .font(.caption.bold())
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                Divider().padding(.leading, 68)
+            }
+        }
+        .background(.quaternary.opacity(0.38), in: RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+struct HighlightedSnippet: View {
+    let text: String
+    let query: String
+
+    var body: some View {
+        Text(attributedText)
+            .multilineTextAlignment(.leading)
+    }
+
+    private var attributedText: AttributedString {
+        var result = AttributedString(text)
+        let terms = query.split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+            .filter { $0.count > 1 }
+        for term in terms {
+            var searchStart = text.startIndex
+            while searchStart < text.endIndex,
+                  let range = text.range(
+                    of: term,
+                    options: [.caseInsensitive, .diacriticInsensitive],
+                    range: searchStart..<text.endIndex
+                  ) {
+                if let attributedRange = Range(range, in: result) {
+                    result[attributedRange].backgroundColor = .yellow.opacity(0.45)
+                    result[attributedRange].font = .body.bold()
+                }
+                searchStart = range.upperBound
+            }
+        }
+        return result
+    }
+}
+
+struct SearchPaperGroup: Identifiable {
+    let id: String
+    let title: String
+    let creators: [Creator]
+    let year: String?
+    let results: [LibrarySearchResult]
+
+    static func group(_ results: [LibrarySearchResult]) -> [SearchPaperGroup] {
+        let grouped = Dictionary(grouping: results) {
+            "\($0.displayTitle.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current))|\($0.year ?? "")|\($0.usableAttachmentKey ?? "")"
+        }
+        return grouped.map { key, values in
+            let first = values[0]
+            return SearchPaperGroup(
+                id: key,
+                title: first.displayTitle,
+                creators: first.creators ?? [],
+                year: first.year,
+                results: values.sorted {
+                    ($0.matchedPage ?? $0.pageStart ?? 0) < ($1.matchedPage ?? $1.pageStart ?? 0)
+                }
+            )
+        }
+        .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+    }
+}
+
+struct AllPapersPage: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        if model.libraryPapers.isEmpty {
+            ContentUnavailableView(
+                "No Papers",
+                systemImage: "books.vertical",
+                description: Text("Refresh the library after Zotero synchronization finishes.")
+            )
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    ForEach(model.libraryPapers) { paper in
+                        LibraryPaperCard(paper: paper) {
+                            Task { await model.open(libraryPaper: paper) }
+                        }
+                    }
+                }
+                .frame(maxWidth: 860)
+                .padding(24)
+            }
+        }
+    }
+}
+
+struct PaperListPage: View {
+    @EnvironmentObject private var model: AppModel
+    let title: String
+    let emptyTitle: String
+    let emptyIcon: String
+    let papers: [Paper]
+
+    var body: some View {
+        if papers.isEmpty {
+            ContentUnavailableView(emptyTitle, systemImage: emptyIcon)
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    ForEach(papers) { paper in
+                        PaperCard(paper: paper) {
+                            Task { await model.open(paper: paper) }
+                        }
+                    }
+                }
+                .frame(maxWidth: 860)
+                .padding(24)
+            }
+        }
     }
 }
 
@@ -328,6 +613,9 @@ struct PaperCard: View {
                         .lineLimit(1)
                 }
                 Spacer()
+                if paper.isStarred {
+                    Image(systemName: "star.fill").foregroundStyle(.yellow)
+                }
                 Image(systemName: "chevron.right")
                     .font(.caption.bold())
                     .foregroundStyle(.tertiary)
@@ -340,108 +628,102 @@ struct PaperCard: View {
     }
 }
 
-struct LibrarySearchPage: View {
-    @EnvironmentObject private var model: AppModel
-
-    private var groups: [SearchPaperGroup] {
-        SearchPaperGroup.group(model.searchResults)
-    }
+struct LibraryPaperCard: View {
+    let paper: LibraryPaper
+    let action: () -> Void
 
     var body: some View {
-        Group {
-            if model.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                ContentUnavailableView(
-                    "Search Your Library",
-                    systemImage: "magnifyingglass",
-                    description: Text("Search by title, author, DOI, citekey, or text.")
-                )
-            } else if model.isSearching && groups.isEmpty {
-                ProgressView("Searching…")
-            } else if groups.isEmpty {
-                ContentUnavailableView.search(text: model.searchQuery)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 10) {
-                        ForEach(groups) { group in
-                            Button {
-                                if let result = group.results.first(where: {
-                                    $0.usableAttachmentKey != nil
-                                }) {
-                                    Task { await model.open(searchResult: result) }
-                                }
-                            } label: {
-                                HStack(spacing: 14) {
-                                    Image(systemName: "doc.richtext")
-                                        .font(.title2)
-                                        .foregroundStyle(.tint)
-                                        .frame(width: 34)
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(group.title)
-                                            .font(.headline)
-                                            .lineLimit(2)
-                                        Text(paperMetadata(group.creators, group.year))
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(1)
-                                        if group.results.count > 1 {
-                                            Text("\(group.results.count) matching attachments")
-                                                .font(.caption)
-                                                .foregroundStyle(.tertiary)
-                                        }
-                                    }
-                                    Spacer()
-                                }
-                                .padding(14)
-                                .background(
-                                    .quaternary.opacity(0.45),
-                                    in: RoundedRectangle(cornerRadius: 12)
-                                )
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .frame(maxWidth: 820)
-                    .padding(24)
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: "doc.richtext")
+                    .font(.title2)
+                    .foregroundStyle(.tint)
+                    .frame(width: 34)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(paper.title)
+                        .font(.headline)
+                        .lineLimit(2)
+                    Text(paperMetadata(paper.creators, paper.year))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.bold())
+                    .foregroundStyle(.tertiary)
             }
+            .padding(14)
+            .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
+            .contentShape(Rectangle())
         }
-        .navigationTitle("Search")
-        .searchable(text: $model.searchQuery, prompt: "Search Zotero Library")
-        .task(id: model.searchQuery) {
-            do {
-                try await Task.sleep(for: .milliseconds(250))
-                guard !Task.isCancelled else { return }
-                await model.search(model.searchQuery)
-            } catch {
-                return
-            }
-        }
+        .buttonStyle(.plain)
     }
 }
 
-struct SearchPaperGroup: Identifiable {
-    let id: String
-    let title: String
-    let creators: [Creator]
-    let year: String?
-    let results: [LibrarySearchResult]
+struct ChatsPage: View {
+    @EnvironmentObject private var model: AppModel
 
-    static func group(_ results: [LibrarySearchResult]) -> [SearchPaperGroup] {
-        let grouped = Dictionary(grouping: results) {
-            "\($0.title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current))|\($0.year ?? "")"
-        }
-        return grouped.map { key, values in
-            let first = values[0]
-            return SearchPaperGroup(
-                id: key,
-                title: first.title,
-                creators: first.creators ?? [],
-                year: first.year,
-                results: values
+    private var groups: [(String, [ChatOverview])] {
+        Dictionary(grouping: model.chatOverviews, by: \.paperID)
+            .values
+            .map { ($0[0].paperTitle, $0) }
+            .sorted { $0.0.localizedCaseInsensitiveCompare($1.0) == .orderedAscending }
+    }
+
+    var body: some View {
+        if groups.isEmpty {
+            ContentUnavailableView(
+                "No Chats Yet",
+                systemImage: "bubble.left.and.bubble.right",
+                description: Text("Chats you start from a paper will appear here.")
             )
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 18) {
+                    ForEach(groups, id: \.0) { paperTitle, chats in
+                        VStack(alignment: .leading, spacing: 0) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(paperTitle).font(.headline).lineLimit(2)
+                                Text(paperMetadata(chats[0].authors, chats[0].year))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(14)
+                            Divider()
+                            ForEach(chats) { chat in
+                                Button {
+                                    Task { await model.open(chat: chat) }
+                                } label: {
+                                    HStack {
+                                        Image(systemName: "bubble.left")
+                                            .foregroundStyle(.secondary)
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(chat.title).lineLimit(1)
+                                            Text(chat.lastUsedAt)
+                                                .font(.caption2)
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                        Spacer()
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption.bold())
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 10)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .background(.quaternary.opacity(0.38), in: RoundedRectangle(cornerRadius: 12))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                }
+                .frame(maxWidth: 860)
+                .padding(24)
+            }
         }
-        .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
 }
 
@@ -533,40 +815,50 @@ struct PDFPane: View {
     @ObservedObject var session: PaperSession
 
     var body: some View {
-        Group {
-            if let url = session.pdfURL {
-                PDFKitView(
-                    url: url,
-                    pageIndex: Binding(
-                        get: { session.pageIndex },
-                        set: { model.pageChanged($0, in: session) }
-                    ),
-                    zoomScale: Binding(
-                        get: { session.zoomScale },
-                        set: {
-                            model.pdfViewStateChanged(
-                                in: session,
-                                pageIndex: session.pageIndex,
-                                zoomScale: $0,
-                                scrollOffset: session.scrollOffset
-                            )
-                        }
-                    ),
-                    scrollOffset: Binding(
-                        get: { session.scrollOffset },
-                        set: {
-                            model.pdfViewStateChanged(
-                                in: session,
-                                pageIndex: session.pageIndex,
-                                zoomScale: session.zoomScale,
-                                scrollOffset: $0
-                            )
-                        }
-                    ),
-                    selectedText: $session.selectedText
-                )
-            } else {
-                ProgressView("Downloading PDF…")
+        ZStack(alignment: .topTrailing) {
+            Group {
+                if let url = session.pdfURL {
+                    PDFKitView(
+                        url: url,
+                        pageIndex: Binding(
+                            get: { session.pageIndex },
+                            set: { model.pageChanged($0, in: session) }
+                        ),
+                        zoomScale: Binding(
+                            get: { session.zoomScale },
+                            set: {
+                                model.pdfViewStateChanged(
+                                    in: session,
+                                    pageIndex: session.pageIndex,
+                                    zoomScale: $0,
+                                    scrollOffset: session.scrollOffset
+                                )
+                            }
+                        ),
+                        scrollOffset: Binding(
+                            get: { session.scrollOffset },
+                            set: {
+                                model.pdfViewStateChanged(
+                                    in: session,
+                                    pageIndex: session.pageIndex,
+                                    zoomScale: session.zoomScale,
+                                    scrollOffset: $0
+                                )
+                            }
+                        ),
+                        selectedText: $session.selectedText,
+                        highlightTarget: session.pdfHighlightTarget
+                    )
+                } else {
+                    ProgressView("Downloading PDF…")
+                }
+            }
+
+            if session.isPDFSearchPresented {
+                PDFSearchPanel(session: session)
+                    .frame(width: 360)
+                    .padding(10)
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
         .safeAreaInset(edge: .bottom) {
@@ -589,8 +881,78 @@ struct PDFPane: View {
     }
 }
 
-struct ChatPane: View {
+struct PDFSearchPanel: View {
     @EnvironmentObject private var model: AppModel
+    @ObservedObject var session: PaperSession
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Find in PDF", text: $session.pdfSearchQuery)
+                    .textFieldStyle(.plain)
+                    .focused($focused)
+                if !session.pdfSearchQuery.isEmpty {
+                    Text("\(session.pdfSearchResults.count)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Button("Close", systemImage: "xmark") {
+                    session.isPDFSearchPresented = false
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.plain)
+            }
+            .padding(11)
+
+            if !session.pdfSearchResults.isEmpty {
+                Divider()
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(session.pdfSearchResults.prefix(100)) { result in
+                            Button {
+                                model.selectPDFSearchResult(result, in: session)
+                            } label: {
+                                HStack(alignment: .top, spacing: 9) {
+                                    Text("p. \(result.pageIndex + 1)")
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                    HighlightedSnippet(
+                                        text: result.snippet,
+                                        query: session.pdfSearchQuery
+                                    )
+                                    .font(.caption)
+                                    .lineLimit(3)
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(9)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            Divider()
+                        }
+                    }
+                }
+                .frame(maxHeight: 330)
+            }
+        }
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.secondary.opacity(0.32), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.18), radius: 14, y: 5)
+        .onAppear { focused = true }
+        .task(id: session.pdfSearchQuery) {
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled else { return }
+            model.searchPDF(session.pdfSearchQuery, in: session)
+        }
+    }
+}
+
+struct ChatPane: View {
     @ObservedObject var session: PaperSession
 
     var body: some View {
@@ -598,7 +960,7 @@ struct ChatPane: View {
             switch session.chatRoute {
             case .list:
                 ChatListView(session: session)
-            case .conversation:
+            case .conversation, .compose:
                 ConversationView(session: session)
             }
         }
@@ -616,7 +978,7 @@ struct ChatListView: View {
                 Text("Chats").font(.headline)
                 Spacer()
                 Button("New Chat", systemImage: "square.and.pencil") {
-                    Task { await model.createThread(in: session) }
+                    model.beginNewChat(in: session)
                 }
                 .labelStyle(.iconOnly)
             }
@@ -625,11 +987,14 @@ struct ChatListView: View {
             Divider()
 
             if session.threads.isEmpty {
-                ContentUnavailableView(
-                    "No Chats Yet",
-                    systemImage: "bubble.left.and.bubble.right",
-                    description: Text("Start a chat about this paper.")
-                )
+                Spacer()
+                Text("Ask your first question about this paper.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding()
+                Spacer()
+                Divider()
+                ChatComposer(session: session)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 3) {
@@ -679,12 +1044,12 @@ struct ConversationView: View {
                     model.showChatList(session)
                 }
                 .labelStyle(.iconOnly)
-                Text(session.selectedThread?.title ?? "Chat")
+                Text(session.selectedThread?.title ?? "New Chat")
                     .font(.headline)
                     .lineLimit(1)
                 Spacer()
                 Button("New Chat", systemImage: "square.and.pencil") {
-                    Task { await model.createThread(in: session) }
+                    model.beginNewChat(in: session)
                 }
                 .labelStyle(.iconOnly)
             }
@@ -695,6 +1060,12 @@ struct ConversationView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 11) {
+                        if session.messages.isEmpty {
+                            Text("Ask a question about this paper.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .padding(.top, 28)
+                        }
                         ForEach(session.messages) { message in
                             MessageBubble(message: message, session: session)
                                 .id(message.id)
@@ -718,6 +1089,7 @@ struct ConversationView: View {
 struct ChatComposer: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var session: PaperSession
+    @FocusState private var editorFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -727,53 +1099,117 @@ struct ChatComposer: View {
                     .lineLimit(2)
                     .foregroundStyle(.secondary)
             }
-            HStack {
-                Menu {
-                    if model.models.isEmpty {
-                        Text("Server default")
-                    } else {
-                        ForEach(model.models) { option in
-                            Button {
-                                model.selectedModelID = option.id
-                            } label: {
-                                if model.selectedModelID == option.id {
-                                    Label(option.displayName, systemImage: "checkmark")
-                                } else {
-                                    Text(option.displayName)
-                                }
-                            }
-                        }
+            VStack(spacing: 5) {
+                ZStack(alignment: .topLeading) {
+                    if session.draft.isEmpty {
+                        Text("Ask about page \(session.pageIndex + 1)…")
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 8)
                     }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(model.selectedModel?.displayName ?? "Default model")
-                            .lineLimit(1)
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.caption2)
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    TextEditor(text: $session.draft)
+                        .focused($editorFocused)
+                        .scrollContentBackground(.hidden)
+                        .frame(minHeight: 62, maxHeight: 150)
                 }
-                Spacer()
+
+                HStack(spacing: 8) {
+                    ModelMenu()
+                    EffortMenu()
+                    Spacer()
+                    Button("Send", systemImage: "arrow.up.circle.fill") {
+                        Task { await model.send(in: session) }
+                    }
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .labelStyle(.iconOnly)
+                    .font(.title2)
+                    .buttonStyle(.plain)
+                    .disabled(session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
             }
-            HStack(alignment: .bottom) {
-                TextField(
-                    "Ask about page \(session.pageIndex + 1)…",
-                    text: $session.draft,
-                    axis: .vertical
-                )
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(1...6)
-                .onSubmit { Task { await model.send(in: session) } }
-                Button("Send", systemImage: "arrow.up.circle.fill") {
-                    Task { await model.send(in: session) }
-                }
-                .labelStyle(.iconOnly)
-                .font(.title2)
-                .disabled(session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .padding(8)
+            .background(.quaternary.opacity(0.48), in: RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(
+                        editorFocused
+                            ? Color.accentColor.opacity(0.65)
+                            : Color.secondary.opacity(0.3)
+                    )
             }
         }
         .padding(10)
+        .onAppear {
+            if session.selectedThread == nil {
+                editorFocused = true
+            }
+        }
+    }
+}
+
+struct ModelMenu: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        Menu {
+            if model.models.isEmpty {
+                Text("Server default")
+            } else {
+                ForEach(model.models) { option in
+                    Button {
+                        model.selectModel(option.id)
+                    } label: {
+                        if model.selectedModelID == option.id {
+                            Label(option.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(option.displayName)
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(model.selectedModel?.displayName ?? "Default model")
+                    .lineLimit(1)
+                Image(systemName: "chevron.down").font(.caption2)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+}
+
+struct EffortMenu: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        if let selectedModel = model.selectedModel,
+           !selectedModel.supportedReasoningEfforts.isEmpty {
+            Menu {
+                ForEach(selectedModel.supportedReasoningEfforts) { effort in
+                    Button {
+                        model.selectedEffortID = effort.reasoningEffort
+                    } label: {
+                        if model.selectedEffortID == effort.reasoningEffort {
+                            Label(effort.reasoningEffort.capitalized, systemImage: "checkmark")
+                        } else {
+                            Text(effort.reasoningEffort.capitalized)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text((model.selectedEffortID ?? selectedModel.defaultReasoningEffort).capitalized)
+                    Image(systemName: "chevron.down").font(.caption2)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
     }
 }
 
@@ -823,10 +1259,19 @@ struct MessageBubble: View {
 }
 
 private func paperMetadata(_ authors: [Creator], _ year: String?) -> String {
-    [authors.prefix(3).map(\.displayName).filter { !$0.isEmpty }.joined(separator: ", "), year]
+    [authors.map(\.displayName).filter { !$0.isEmpty }.joined(separator: ", "), year]
         .compactMap { $0 }
         .filter { !$0.isEmpty }
         .joined(separator: " · ")
+}
+
+private func compactPaperMetadata(_ authors: [Creator], _ year: String?) -> String {
+    let names = authors.map(\.displayName).filter { !$0.isEmpty }
+    let author = names.isEmpty ? nil : names.count == 1 ? names[0] : "\(names[0]) et al."
+    return [author, year]
+        .compactMap { $0 }
+        .filter { !$0.isEmpty }
+        .joined(separator: " ")
 }
 
 extension Color {

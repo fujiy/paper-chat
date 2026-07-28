@@ -36,8 +36,22 @@ def client_for(tmp_path, monkeypatch) -> TestClient:
             "text": f"[page {start}]\nTest evidence.",
         }
 
+    async def papers(self, limit=500, offset=0):
+        return {
+            "papers": [
+                {
+                    "item_key": "ITEM1",
+                    "attachment_key": "ATT1",
+                    "title": "Test Paper",
+                    "creators": [{"name": "Ada Lovelace"}],
+                    "year": "1843",
+                }
+            ]
+        }
+
     monkeypatch.setattr("paperchat.library.ZoteroLibrary.metadata", metadata)
     monkeypatch.setattr("paperchat.library.ZoteroLibrary.pages", pages)
+    monkeypatch.setattr("paperchat.library.ZoteroLibrary.papers", papers)
     return TestClient(app)
 
 
@@ -97,6 +111,7 @@ def test_paper_thread_reading_state_and_streaming_chat(tmp_path, monkeypatch):
                 "selected_text": "Test evidence.",
                 "client_request_id": "request-1",
                 "model": "fake",
+                "effort": "high",
             },
             headers=headers,
         )
@@ -106,6 +121,7 @@ def test_paper_thread_reading_state_and_streaming_chat(tmp_path, monkeypatch):
     assert state.status_code == 200
     assert models.status_code == 200
     assert models.json()["models"][0]["id"] == "fake"
+    assert models.json()["models"][0]["default_reasoning_effort"] == "medium"
     assert chat.status_code == 200
     events = [
         line.removeprefix("event: ")
@@ -119,6 +135,33 @@ def test_paper_thread_reading_state_and_streaming_chat(tmp_path, monkeypatch):
     assert messages[1]["status"] == "completed"
     assert "[p. 1]" in messages[1]["content"]
     assert paper_after["reading_state"]["page_index"] == 4
+
+
+def test_library_starred_and_chat_overview(tmp_path, monkeypatch):
+    with client_for(tmp_path, monkeypatch) as client:
+        headers = {"Authorization": f"Bearer {register(client)['access_token']}"}
+        library = client.get("/api/library/papers", headers=headers)
+        paper = client.post(
+            "/api/papers/resolve", json={"attachment_key": "ATT1"}, headers=headers
+        ).json()
+        starred = client.patch(
+            f"/api/papers/{paper['id']}/star",
+            json={"starred": True},
+            headers=headers,
+        )
+        thread = client.post(
+            f"/api/papers/{paper['id']}/threads",
+            json={"title": "First question"},
+            headers=headers,
+        ).json()
+        starred_papers = client.get("/api/papers/starred", headers=headers)
+        chats = client.get("/api/chats", headers=headers)
+
+    assert library.json()["papers"][0]["attachment_key"] == "ATT1"
+    assert starred.json() == {"starred": True}
+    assert starred_papers.json()[0]["starred"] is True
+    assert chats.json()[0]["id"] == thread["id"]
+    assert chats.json()[0]["paper_title"] == "Test Paper"
 
 
 def test_resolve_is_stable_for_same_attachment(tmp_path, monkeypatch):

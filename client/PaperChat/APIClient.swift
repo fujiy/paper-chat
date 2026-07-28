@@ -34,6 +34,19 @@ actor APIClient {
         try await request("api/papers/recent")
     }
 
+    func starredPapers() async throws -> [Paper] {
+        try await request("api/papers/starred")
+    }
+
+    func libraryPapers() async throws -> [LibraryPaper] {
+        let response: LibraryPaperResponse = try await request("api/library/papers?limit=1000")
+        return response.papers
+    }
+
+    func chats() async throws -> [ChatOverview] {
+        try await request("api/chats")
+    }
+
     func search(_ query: String) async throws -> [LibrarySearchResult] {
         let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
         let response: LibrarySearchResponse = try await request("api/library/search?q=\(encoded)")
@@ -55,6 +68,15 @@ actor APIClient {
 
     func paper(id: String) async throws -> Paper {
         try await request("api/papers/\(id)")
+    }
+
+    func setStar(paperID: String, starred: Bool) async throws -> Bool {
+        let response: StarResponse = try await request(
+            "api/papers/\(paperID)/star",
+            method: "PATCH",
+            body: ["starred": starred]
+        )
+        return response.starred
     }
 
     func threads(paperID: String) async throws -> [ChatThread] {
@@ -111,7 +133,8 @@ actor APIClient {
         content: String,
         pageIndex: Int,
         selectedText: String?,
-        model: String?
+        model: String?,
+        effort: String?
     ) -> AsyncThrowingStream<StreamEvent, Error> {
         AsyncThrowingStream { continuation in
             Task {
@@ -125,6 +148,7 @@ actor APIClient {
                         "selected_text": (selectedText ?? NSNull()) as Any,
                         "client_request_id": UUID().uuidString,
                         "model": (model ?? NSNull()) as Any,
+                        "effort": (effort ?? NSNull()) as Any,
                     ])
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     var result = try await session.bytes(for: request)

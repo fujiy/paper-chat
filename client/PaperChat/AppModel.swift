@@ -1,4 +1,5 @@
 import Foundation
+import PDFKit
 import SwiftUI
 #if !os(macOS)
 import UIKit
@@ -11,12 +12,18 @@ final class AppModel: ObservableObject {
     @Published var isSearching = false
     @Published var errorMessage: String?
     @Published var recentPapers: [Paper] = []
+    @Published var starredPapers: [Paper] = []
+    @Published var libraryPapers: [LibraryPaper] = []
+    @Published var chatOverviews: [ChatOverview] = []
     @Published var searchResults: [LibrarySearchResult] = []
     @Published var searchQuery = ""
+    @Published var searchFocusToken = UUID()
     @Published var route: WorkspaceRoute = .start
+    @Published var navigationHistory: [WorkspaceRoute] = []
     @Published var openSessions: [PaperSession] = []
     @Published var models: [ModelOption] = []
     @Published var selectedModelID: String?
+    @Published var selectedEffortID: String?
 
     @Published var serverURLString = UserDefaults.standard.string(forKey: "serverURL")
         ?? "http://localhost:8001/"
@@ -31,6 +38,12 @@ final class AppModel: ObservableObject {
 
     var selectedModel: ModelOption? {
         models.first(where: { $0.id == selectedModelID })
+    }
+
+    var selectedEffort: ReasoningEffortOption? {
+        selectedModel?.supportedReasoningEfforts.first(where: {
+            $0.reasoningEffort == selectedEffortID
+        })
     }
 
     func restoreSession() async {
@@ -71,38 +84,75 @@ final class AppModel: ObservableObject {
         saveTasks = [:]
         isAuthenticated = false
         recentPapers = []
+        starredPapers = []
+        libraryPapers = []
+        chatOverviews = []
         searchResults = []
         openSessions = []
+        navigationHistory = []
         route = .start
     }
 
     func refreshLibrary() async {
-        await perform { recentPapers = try await client.recentPapers() }
+        await perform {
+            async let recent = client.recentPapers()
+            async let starred = client.starredPapers()
+            async let papers = client.libraryPapers()
+            async let chats = client.chats()
+            recentPapers = try await recent
+            starredPapers = try await starred
+            libraryPapers = try await papers
+            chatOverviews = try await chats
+        }
     }
 
     func loadModels() async {
         do {
-            let loaded = try await client.models()
-            models = loaded
-            if selectedModelID == nil || !loaded.contains(where: { $0.id == selectedModelID }) {
-                selectedModelID = loaded.first(where: \.isDefault)?.id ?? loaded.first?.id
-            }
+            models = try await client.models()
+            let chosen = models.first(where: { $0.id == selectedModelID })
+                ?? models.first(where: \.isDefault)
+                ?? models.first
+            selectModel(chosen?.id)
         } catch {
             models = []
             selectedModelID = nil
+            selectedEffortID = nil
         }
     }
 
-    func showStart() {
-        route = .start
+    func selectModel(_ id: String?) {
+        selectedModelID = id
+        guard let model = models.first(where: { $0.id == id }) else {
+            selectedEffortID = nil
+            return
+        }
+        if !model.supportedReasoningEfforts.contains(where: {
+            $0.reasoningEffort == selectedEffortID
+        }) {
+            selectedEffortID = model.defaultReasoningEffort
+        }
     }
 
-    func showRecent() {
-        route = .recent
+    func navigate(to destination: WorkspaceRoute, fromSidebar: Bool = false) {
+        if fromSidebar {
+            navigationHistory = []
+            route = destination
+            if destination == .search {
+                searchFocusToken = UUID()
+            }
+            return
+        }
+        guard destination != route else { return }
+        navigationHistory.append(route)
+        route = destination
+        if destination == .search {
+            searchFocusToken = UUID()
+        }
     }
 
-    func showSearch() {
-        route = .search
+    func goBack() {
+        guard let destination = navigationHistory.popLast() else { return }
+        route = destination
     }
 
     func search(_ query: String) async {
@@ -135,18 +185,46 @@ final class AppModel: ObservableObject {
         guard let key = searchResult.usableAttachmentKey else { return }
         await perform {
             let paper = try await client.resolve(attachmentKey: key)
-            try await openPaper(paper)
+            let session = try await openPaper(paper, fromSidebar: false)
+            if let matchedPage = searchResult.matchedPage ?? searchResult.pageStart {
+                session.pageIndex = max(0, matchedPage - 1)
+                session.pdfHighlightTarget = PDFHighlightTarget(
+                    token: UUID(),
+                    query: searchResult.highlightQuery ?? searchQuery,
+                    pageIndex: session.pageIndex,
+                    occurrenceIndex: 0
+                )
+            }
         }
     }
 
-    func open(paper: Paper) async {
-        await perform { try await openPaper(paper) }
+    func open(libraryPaper: LibraryPaper) async {
+        await perform {
+            let paper = try await client.resolve(attachmentKey: libraryPaper.attachmentKey)
+            _ = try await openPaper(paper, fromSidebar: false)
+        }
     }
 
-    private func openPaper(_ paper: Paper) async throws {
+    func open(paper: Paper, fromSidebar: Bool = false) async {
+        await perform { _ = try await openPaper(paper, fromSidebar: fromSidebar) }
+    }
+
+    func open(chat: ChatOverview) async {
+        await perform {
+            let paper = try await client.paper(id: chat.paperID)
+            let session = try await openPaper(paper, fromSidebar: false)
+            if let thread = session.threads.first(where: { $0.id == chat.id }) {
+                try await selectThread(thread, in: session)
+                session.isChatPresented = true
+            }
+        }
+    }
+
+    @discardableResult
+    private func openPaper(_ paper: Paper, fromSidebar: Bool) async throws -> PaperSession {
         if let existing = openSessions.first(where: { $0.id == paper.id }) {
-            route = .paper(existing.id)
-            return
+            navigate(to: .paper(existing.id), fromSidebar: fromSidebar)
+            return existing
         }
 
         let detail = try await client.paper(id: paper.id)
@@ -154,11 +232,7 @@ final class AppModel: ObservableObject {
         session.threads = try await client.threads(paperID: detail.id)
         if let activeID = detail.readingState?.activeThreadID,
            let active = session.threads.first(where: { $0.id == activeID }) {
-            session.selectedThread = active
-        }
-        if let selectedThread = session.selectedThread {
-            session.messages = try await client.messages(threadID: selectedThread.id)
-            session.chatRoute = .conversation
+            try await selectThread(active, in: session)
         }
         if let cached = await PDFCache.shared.cachedURL(paperID: detail.id) {
             session.pdfURL = cached
@@ -169,71 +243,110 @@ final class AppModel: ObservableObject {
         recentPapers.removeAll(where: { $0.id == detail.id })
         recentPapers.insert(detail, at: 0)
         openSessions.append(session)
-        route = .paper(session.id)
+        navigate(to: .paper(session.id), fromSidebar: fromSidebar)
+        return session
+    }
+
+    func toggleStar(in session: PaperSession) async {
+        let next = !session.paper.isStarred
+        do {
+            let saved = try await client.setStar(paperID: session.id, starred: next)
+            session.paper.starred = saved
+            recentPapers = recentPapers.map {
+                var paper = $0
+                if paper.id == session.id { paper.starred = saved }
+                return paper
+            }
+            if saved {
+                starredPapers.removeAll(where: { $0.id == session.id })
+                starredPapers.insert(session.paper, at: 0)
+            } else {
+                starredPapers.removeAll(where: { $0.id == session.id })
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func presentChat(in session: PaperSession) {
+        if session.threads.isEmpty {
+            beginNewChat(in: session)
+        } else if session.selectedThread == nil {
+            session.chatRoute = .list
+        }
+        session.isChatPresented = true
     }
 
     func showChatList(_ session: PaperSession) {
         session.chatRoute = .list
     }
 
-    func switchThread(_ thread: ChatThread, in session: PaperSession) async {
-        session.selectedThread = thread
-        session.chatRoute = .conversation
-        await perform {
-            session.messages = try await client.messages(threadID: thread.id)
-            try await saveReadingState(session)
-        }
+    func beginNewChat(in session: PaperSession) {
+        session.selectedThread = nil
+        session.messages = []
+        session.chatRoute = .compose
+        session.isChatPresented = true
     }
 
-    func createThread(in session: PaperSession) async {
-        await perform {
-            let thread = try await client.createThread(
-                paperID: session.id, title: "Chat \(session.threads.count + 1)"
-            )
-            session.threads.insert(thread, at: 0)
-            session.selectedThread = thread
-            session.messages = []
-            session.chatRoute = .conversation
-            session.isChatPresented = true
-            try await saveReadingState(session)
-        }
+    func switchThread(_ thread: ChatThread, in session: PaperSession) async {
+        await perform { try await selectThread(thread, in: session) }
+    }
+
+    private func selectThread(_ thread: ChatThread, in session: PaperSession) async throws {
+        session.selectedThread = thread
+        session.chatRoute = .conversation
+        session.messages = try await client.messages(threadID: thread.id)
+        try await saveReadingState(session)
     }
 
     func send(in session: PaperSession) async {
-        guard let thread = session.selectedThread else { return }
         let question = session.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { return }
-        session.draft = ""
-        let localUser = ChatMessage(
-            id: UUID().uuidString,
-            threadID: thread.id,
-            role: "user",
-            content: question,
-            pageRefs: [.init(pageIndex: session.pageIndex)],
-            selectedText: session.selectedText,
-            status: "completed",
-            createdAt: ISO8601DateFormatter().string(from: Date())
-        )
-        session.messages.append(localUser)
-        var assistant = ChatMessage(
-            id: UUID().uuidString,
-            threadID: thread.id,
-            role: "assistant",
-            content: "",
-            pageRefs: [],
-            selectedText: nil,
-            status: "streaming",
-            createdAt: ISO8601DateFormatter().string(from: Date())
-        )
-        session.messages.append(assistant)
-        let assistantIndex = session.messages.count - 1
+
         do {
+            let thread: ChatThread
+            if let selected = session.selectedThread {
+                thread = selected
+            } else {
+                let title = String(question.prefix(80))
+                thread = try await client.createThread(paperID: session.id, title: title)
+                session.threads.insert(thread, at: 0)
+                session.selectedThread = thread
+                session.chatRoute = .conversation
+                try await saveReadingState(session)
+            }
+
+            session.draft = ""
+            let localUser = ChatMessage(
+                id: UUID().uuidString,
+                threadID: thread.id,
+                role: "user",
+                content: question,
+                pageRefs: [.init(pageIndex: session.pageIndex)],
+                selectedText: session.selectedText,
+                status: "completed",
+                createdAt: ISO8601DateFormatter().string(from: Date())
+            )
+            session.messages.append(localUser)
+            var assistant = ChatMessage(
+                id: UUID().uuidString,
+                threadID: thread.id,
+                role: "assistant",
+                content: "",
+                pageRefs: [],
+                selectedText: nil,
+                status: "streaming",
+                createdAt: ISO8601DateFormatter().string(from: Date())
+            )
+            session.messages.append(assistant)
+            let assistantIndex = session.messages.count - 1
             for try await event in await client.streamMessage(
                 threadID: thread.id,
                 content: question,
                 pageIndex: session.pageIndex,
                 selectedText: session.selectedText,
-                model: selectedModel?.model
+                model: selectedModel?.model,
+                effort: selectedEffortID
             ) {
                 switch event {
                 case let .delta(text):
@@ -243,13 +356,71 @@ final class AppModel: ObservableObject {
                     errorMessage = detail
                 case .done:
                     session.messages = try await client.messages(threadID: thread.id)
+                    await refreshChatOverviews()
                 case .message:
                     break
                 }
             }
         } catch {
+            session.draft = question
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func refreshChatOverviews() async {
+        if let chats = try? await client.chats() {
+            chatOverviews = chats
+        }
+    }
+
+    func searchPDF(_ query: String, in session: PaperSession) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let url = session.pdfURL,
+              let document = PDFDocument(url: url) else {
+            session.pdfSearchResults = []
+            return
+        }
+        var results: [PDFSearchResult] = []
+        for pageIndex in 0..<document.pageCount {
+            guard let text = document.page(at: pageIndex)?.string else { continue }
+            let source = text as NSString
+            var searchRange = NSRange(location: 0, length: source.length)
+            var occurrence = 0
+            while searchRange.length > 0 {
+                let found = source.range(
+                    of: trimmed,
+                    options: [.caseInsensitive, .diacriticInsensitive],
+                    range: searchRange
+                )
+                guard found.location != NSNotFound else { break }
+                let contextStart = max(0, found.location - 80)
+                let contextEnd = min(source.length, NSMaxRange(found) + 120)
+                let snippet = source.substring(
+                    with: NSRange(location: contextStart, length: contextEnd - contextStart)
+                )
+                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+                results.append(PDFSearchResult(
+                    id: "\(pageIndex)-\(occurrence)-\(found.location)",
+                    pageIndex: pageIndex,
+                    occurrenceIndex: occurrence,
+                    snippet: snippet
+                ))
+                occurrence += 1
+                let next = NSMaxRange(found)
+                searchRange = NSRange(location: next, length: source.length - next)
+            }
+        }
+        session.pdfSearchResults = results
+    }
+
+    func selectPDFSearchResult(_ result: PDFSearchResult, in session: PaperSession) {
+        session.pageIndex = result.pageIndex
+        session.pdfHighlightTarget = PDFHighlightTarget(
+            token: UUID(),
+            query: session.pdfSearchQuery,
+            pageIndex: result.pageIndex,
+            occurrenceIndex: result.occurrenceIndex
+        )
     }
 
     func pageChanged(_ index: Int, in session: PaperSession) {

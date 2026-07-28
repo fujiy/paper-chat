@@ -58,6 +58,11 @@ class MessageRequest(BaseModel):
     selected_text: str | None = Field(default=None, max_length=20000)
     client_request_id: str = Field(min_length=1, max_length=200)
     model: str | None = Field(default=None, min_length=1, max_length=200)
+    effort: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class StarRequest(BaseModel):
+    starred: bool
 
 
 @app.get("/health")
@@ -101,6 +106,16 @@ async def search_library(
     settings: SettingsDependency,
 ):
     return await ZoteroLibrary(settings).search(q)
+
+
+@app.get("/api/library/papers")
+async def library_papers(
+    _: Session,
+    settings: SettingsDependency,
+    limit: int = Query(default=500, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+):
+    return await ZoteroLibrary(settings).papers(limit=limit, offset=offset)
 
 
 @app.get("/api/models")
@@ -206,6 +221,9 @@ def paper_detail(conn, paper_id: str, device_id: str) -> dict:
             (paper_id, device_id),
         ).fetchone()
     )
+    paper["starred"] = bool(
+        conn.execute("SELECT 1 FROM paper_stars WHERE paper_id = ?", (paper_id,)).fetchone()
+    )
     return paper
 
 
@@ -214,6 +232,66 @@ def recent_papers(_: Session, settings: SettingsDependency):
     with connect(settings.resolved_database_path) as conn:
         rows = conn.execute(
             "SELECT * FROM papers ORDER BY last_opened_at DESC NULLS LAST LIMIT 100"
+        ).fetchall()
+        result = [as_dict(row) for row in rows]
+        starred = {
+            row["paper_id"] for row in conn.execute("SELECT paper_id FROM paper_stars").fetchall()
+        }
+    for paper in result:
+        paper["starred"] = paper["id"] in starred
+    return result
+
+
+@app.get("/api/papers/starred")
+def starred_papers(_: Session, settings: SettingsDependency):
+    with connect(settings.resolved_database_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT p.* FROM papers p
+            JOIN paper_stars s ON s.paper_id = p.id
+            ORDER BY s.starred_at DESC
+            """
+        ).fetchall()
+    result = [as_dict(row) for row in rows]
+    for paper in result:
+        paper["starred"] = True
+    return result
+
+
+@app.patch("/api/papers/{paper_id}/star")
+def set_paper_star(
+    paper_id: str,
+    payload: StarRequest,
+    _: Session,
+    settings: SettingsDependency,
+):
+    with connect(settings.resolved_database_path) as conn:
+        if not conn.execute("SELECT 1 FROM papers WHERE id = ?", (paper_id,)).fetchone():
+            raise HTTPException(404, "Paper not found")
+        if payload.starred:
+            conn.execute(
+                """
+                INSERT INTO paper_stars (paper_id, starred_at) VALUES (?, ?)
+                ON CONFLICT(paper_id) DO UPDATE SET starred_at=excluded.starred_at
+                """,
+                (paper_id, now()),
+            )
+        else:
+            conn.execute("DELETE FROM paper_stars WHERE paper_id = ?", (paper_id,))
+    return {"starred": payload.starred}
+
+
+@app.get("/api/chats")
+def all_chats(_: Session, settings: SettingsDependency):
+    with connect(settings.resolved_database_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT t.*, p.title AS paper_title, p.authors_json, p.year
+            FROM threads t
+            JOIN papers p ON p.id = t.paper_id
+            ORDER BY t.last_used_at DESC
+            LIMIT 500
+            """
         ).fetchall()
     return [as_dict(row) for row in rows]
 
@@ -393,7 +471,7 @@ async def send_message(
         try:
             yield sse("message", {"message_id": assistant_id, "user_message_id": user_id})
             async for event in backend(settings).stream(
-                prompt, thread["backend_thread_id"], payload.model
+                prompt, thread["backend_thread_id"], payload.model, payload.effort
             ):
                 if event.kind == "thread" and event.backend_thread_id:
                     with connect(settings.resolved_database_path) as conn:

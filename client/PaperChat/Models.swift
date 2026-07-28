@@ -16,6 +16,9 @@ struct Paper: Codable, Identifiable, Hashable, Sendable {
     var identifiers: [PaperIdentifier]?
     var readingState: ReadingState?
     var lastOpenedAt: String?
+    var starred: Bool?
+
+    var isStarred: Bool { starred == true }
 }
 
 struct Creator: Codable, Hashable, Sendable {
@@ -124,14 +127,54 @@ struct LibrarySearchResponse: Codable, Sendable {
 }
 
 struct LibrarySearchResult: Codable, Identifiable, Sendable {
-    var id: String { resolvedAttachmentKey ?? "\(title)-\(year ?? "")" }
+    var id: String {
+        "\(resolvedAttachmentKey ?? title)-\(matchedPage ?? pageStart ?? 0)-\(snippet ?? "")"
+    }
     let title: String
+    let paperTitle: String?
     let creators: [Creator]?
     let year: String?
     let resolvedAttachmentKey: String?
     let attachmentKey: String?
+    let pageStart: Int?
+    let pageEnd: Int?
+    let matchedPage: Int?
+    let snippet: String?
+    let highlightQuery: String?
 
     var usableAttachmentKey: String? { resolvedAttachmentKey ?? attachmentKey }
+    var displayTitle: String { paperTitle ?? title }
+}
+
+struct LibraryPaperResponse: Codable, Sendable {
+    let papers: [LibraryPaper]
+}
+
+struct LibraryPaper: Codable, Identifiable, Hashable, Sendable {
+    var id: String { attachmentKey }
+    let itemKey: String
+    let attachmentKey: String
+    let title: String
+    let creators: [Creator]
+    let year: String?
+}
+
+struct StarResponse: Codable, Sendable {
+    let starred: Bool
+}
+
+struct ChatOverview: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let paperID: String
+    let title: String
+    let backendType: String
+    let backendThreadID: String?
+    let backendStatus: String
+    let isPrimary: Int
+    let lastUsedAt: String
+    let paperTitle: String
+    let authors: [Creator]
+    let year: String?
 }
 
 struct ModelListResponse: Codable, Sendable {
@@ -144,18 +187,44 @@ struct ModelOption: Codable, Identifiable, Hashable, Sendable {
     let displayName: String
     let description: String
     let isDefault: Bool
+    let defaultReasoningEffort: String
+    let supportedReasoningEfforts: [ReasoningEffortOption]
+}
+
+struct ReasoningEffortOption: Codable, Identifiable, Hashable, Sendable {
+    var id: String { reasoningEffort }
+    let reasoningEffort: String
+    let description: String
 }
 
 enum WorkspaceRoute: Hashable {
     case start
-    case recent
     case search
+    case allPapers
+    case recent
+    case starred
+    case chats
     case paper(String)
 }
 
 enum ChatRoute {
     case list
     case conversation
+    case compose
+}
+
+struct PDFSearchResult: Identifiable, Hashable, Sendable {
+    let id: String
+    let pageIndex: Int
+    let occurrenceIndex: Int
+    let snippet: String
+}
+
+struct PDFHighlightTarget: Equatable, Sendable {
+    let token: UUID
+    let query: String
+    let pageIndex: Int
+    let occurrenceIndex: Int
 }
 
 @MainActor
@@ -174,6 +243,10 @@ final class PaperSession: ObservableObject, Identifiable {
     @Published var isChatPresented = false
     @Published var chatRoute: ChatRoute = .list
     @Published var chatWidth: CGFloat = 390
+    @Published var isPDFSearchPresented = false
+    @Published var pdfSearchQuery = ""
+    @Published var pdfSearchResults: [PDFSearchResult] = []
+    @Published var pdfHighlightTarget: PDFHighlightTarget?
 
     init(paper: Paper) {
         id = paper.id

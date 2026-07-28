@@ -47,9 +47,14 @@ CREATE TABLE IF NOT EXISTS device_sessions (
   refresh_hash TEXT NOT NULL UNIQUE, refresh_expires_at INTEGER NOT NULL,
   revoked_at TEXT, created_at TEXT NOT NULL, last_used_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS paper_stars (
+  paper_id TEXT PRIMARY KEY, starred_at TEXT NOT NULL,
+  FOREIGN KEY(paper_id) REFERENCES papers(id) ON DELETE CASCADE
+);
 CREATE INDEX IF NOT EXISTS idx_papers_recent ON papers(last_opened_at DESC);
 CREATE INDEX IF NOT EXISTS idx_threads_paper ON threads(paper_id, last_used_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_paper_stars_at ON paper_stars(starred_at DESC);
 """
 
 
