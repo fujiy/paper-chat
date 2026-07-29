@@ -71,7 +71,7 @@ struct LibraryWorkspace: View {
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             LibrarySidebar()
-                .navigationSplitViewColumnWidth(min: 190, ideal: 235, max: 310)
+                .navigationSplitViewColumnWidth(min: 170, ideal: 225, max: 300)
         } detail: {
             WorkspaceDetail()
         }
@@ -83,41 +83,72 @@ struct LibrarySidebar: View {
 
     var body: some View {
         List {
-            SidebarButton(
-                title: "Start",
-                systemImage: "house",
-                selected: model.route == .start
-            ) { model.navigate(to: .start, fromSidebar: true) }
-            SidebarButton(
-                title: "Search",
-                systemImage: "magnifyingglass",
-                selected: model.route == .search
-            ) { model.navigate(to: .search, fromSidebar: true) }
-            SidebarButton(
-                title: "All Papers",
-                systemImage: "books.vertical",
-                selected: model.route == .allPapers
-            ) { model.navigate(to: .allPapers, fromSidebar: true) }
-            SidebarButton(
-                title: "Recent",
-                systemImage: "clock",
-                selected: model.route == .recent
-            ) { model.navigate(to: .recent, fromSidebar: true) }
-            SidebarButton(
-                title: "Starred",
-                systemImage: "star",
-                selected: model.route == .starred
-            ) { model.navigate(to: .starred, fromSidebar: true) }
-            SidebarButton(
-                title: "Chats",
-                systemImage: "bubble.left.and.bubble.right",
-                selected: model.route == .chats
-            ) { model.navigate(to: .chats, fromSidebar: true) }
+            Section {
+                SidebarButton(
+                    title: "Start",
+                    systemImage: "house",
+                    selected: model.route == .start
+                ) { model.navigate(to: .start, fromSidebar: true) }
+                SidebarButton(
+                    title: "Search",
+                    systemImage: "magnifyingglass",
+                    selected: model.route == .search
+                ) { model.navigate(to: .search, fromSidebar: true) }
+                SidebarButton(
+                    title: "All Papers",
+                    systemImage: "books.vertical",
+                    selected: model.route == .allPapers
+                ) { model.navigate(to: .allPapers, fromSidebar: true) }
+                SidebarButton(
+                    title: "Recent",
+                    systemImage: "clock",
+                    selected: model.route == .recent
+                ) { model.navigate(to: .recent, fromSidebar: true) }
+                SidebarButton(
+                    title: "Starred",
+                    systemImage: "star",
+                    selected: model.route == .starred
+                ) { model.navigate(to: .starred, fromSidebar: true) }
+                SidebarButton(
+                    title: "Chats",
+                    systemImage: "bubble.left.and.bubble.right",
+                    selected: model.route == .chats
+                ) { model.navigate(to: .chats, fromSidebar: true) }
+            }
+
+            if !model.recentPapers.isEmpty {
+                Section("Recent") {
+                    ForEach(model.recentPapers.prefix(8)) { paper in
+                        Button {
+                            Task { await model.open(paper: paper, fromSidebar: true) }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(paper.title)
+                                    .font(.callout.weight(.medium))
+                                    .lineLimit(2)
+                                Text(compactPaperMetadata(paper.authors, paper.year))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(
+                            model.route == .paper(paper.id)
+                                ? Color.accentColor.opacity(0.14)
+                                : Color.clear
+                        )
+                    }
+                }
+            }
         }
         .listStyle(.sidebar)
         .navigationTitle("")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
+        .safeAreaInset(edge: .top, spacing: 0) {
+            HStack {
+                Spacer()
                 Menu {
                     Button("Refresh Library", systemImage: "arrow.clockwise") {
                         Task { await model.refreshLibrary() }
@@ -128,8 +159,14 @@ struct LibrarySidebar: View {
                     }
                 } label: {
                     Label("Library actions", systemImage: "ellipsis.circle")
+                        .labelStyle(.iconOnly)
                 }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
             }
+            .frame(height: 34)
+            .padding(.horizontal, 10)
+            .background(.bar)
         }
     }
 }
@@ -143,9 +180,11 @@ struct SidebarButton: View {
     var body: some View {
         Button(action: action) {
             Label(title, systemImage: systemImage)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
                 .contentShape(Rectangle())
         }
+        .frame(maxWidth: .infinity, minHeight: 34)
+        .contentShape(Rectangle())
         .buttonStyle(.plain)
         .listRowBackground(selected ? Color.accentColor.opacity(0.14) : Color.clear)
     }
@@ -192,6 +231,11 @@ struct WorkspaceDetail: View {
                     .zIndex(model.route == .paper(session.id) ? 2 : 0)
             }
         }
+        .navigationTitle(navigationTitle)
+        .paperNavigationSubtitle(navigationSubtitle)
+        .background {
+            WorkspaceShortcuts()
+        }
         .toolbar {
             if !model.navigationHistory.isEmpty {
                 ToolbarItem(placement: .navigation) {
@@ -200,9 +244,6 @@ struct WorkspaceDetail: View {
                     }
                     .labelStyle(.iconOnly)
                 }
-            }
-            ToolbarItem(placement: .principal) {
-                WorkspaceHeader()
             }
             if let session = model.activeSession {
                 ToolbarItemGroup(placement: .primaryAction) {
@@ -240,54 +281,49 @@ struct WorkspaceDetail: View {
             }
         }
     }
-}
 
-struct WorkspaceHeader: View {
-    @EnvironmentObject private var model: AppModel
-
-    var body: some View {
+    private var navigationTitle: String {
         if let session = model.activeSession {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) {
-                    Text(session.paper.title)
-                        .font(.headline)
-                        .lineLimit(1)
-                    Text(paperMetadata(session.paper.authors, session.paper.year))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                }
-                HStack(spacing: 7) {
-                    Text(session.paper.title)
-                        .font(.headline)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Text(compactPaperMetadata(session.paper.authors, session.paper.year))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                }
-            }
-            .frame(maxWidth: 700, alignment: .leading)
-        } else {
-            Text(pageTitle)
-                .font(.headline)
-                .frame(maxWidth: 700, alignment: .leading)
+            return session.paper.title
+        }
+        switch model.route {
+        case .start: return "Start"
+        case .search: return "Search"
+        case .allPapers: return "All Papers"
+        case .recent: return "Recent"
+        case .starred: return "Starred"
+        case .chats: return "Chats"
+        case .paper: return ""
         }
     }
 
-    private var pageTitle: String {
-        switch model.route {
-        case .start: "Start"
-        case .search: "Search"
-        case .allPapers: "All Papers"
-        case .recent: "Recent"
-        case .starred: "Starred"
-        case .chats: "Chats"
-        case .paper: ""
+    private var navigationSubtitle: String {
+        guard let session = model.activeSession else { return "" }
+        return compactPaperMetadata(session.paper.authors, session.paper.year)
+    }
+}
+
+private struct WorkspaceShortcuts: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        HStack {
+            Button("Find in PDF") {
+                guard let session = model.activeSession else { return }
+                session.isPDFSearchPresented = true
+            }
+            .keyboardShortcut("f", modifiers: .command)
+            .disabled(model.activeSession == nil)
+
+            Button("Search Library") {
+                model.navigate(to: .search)
+            }
+            .keyboardShortcut("f", modifiers: [.command, .shift])
         }
+        .frame(width: 1, height: 1)
+        .opacity(0.001)
+        .clipped()
+        .accessibilityHidden(true)
     }
 }
 
@@ -313,7 +349,7 @@ struct StartPage: View {
                     prompt: "Search title, author, DOI, citekey, or full text"
                 )
                 .focused($searchFocused)
-                .frame(maxWidth: 620)
+                .frame(maxWidth: .infinity)
                 .onChange(of: searchFocused) {
                     if searchFocused {
                         model.navigate(to: .search)
@@ -385,7 +421,8 @@ struct LibrarySearchPage: View {
             )
             .focused($searchFocused)
             .padding(.horizontal, 24)
-            .padding(.vertical, 16)
+            .padding(.vertical, 14)
+            .background(.bar)
 
             Divider()
 
@@ -412,6 +449,7 @@ struct LibrarySearchPage: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onAppear { searchFocused = true }
         .onChange(of: model.searchFocusToken) { searchFocused = true }
@@ -1280,6 +1318,21 @@ extension Color {
         Color(nsColor: .windowBackgroundColor)
         #else
         Color(uiColor: .systemBackground)
+        #endif
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func paperNavigationSubtitle(_ subtitle: String) -> some View {
+        #if os(macOS)
+        navigationSubtitle(subtitle)
+        #else
+        if #available(iOS 26.0, *) {
+            navigationSubtitle(subtitle)
+        } else {
+            self
+        }
         #endif
     }
 }
