@@ -47,10 +47,15 @@ actor APIClient {
         try await request("api/chats")
     }
 
-    func search(_ query: String) async throws -> [LibrarySearchResult] {
-        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
-        let response: LibrarySearchResponse = try await request("api/library/search?q=\(encoded)")
-        return response.results
+    func search(_ query: String, limit: Int, offset: Int) async throws -> LibrarySearchResponse {
+        var components = URLComponents()
+        components.queryItems = [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "offset", value: String(offset)),
+        ]
+        let queryString = components.percentEncodedQuery ?? ""
+        return try await request("api/library/search?\(queryString)")
     }
 
     func models() async throws -> [ModelOption] {

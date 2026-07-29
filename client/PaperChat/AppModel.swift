@@ -10,6 +10,8 @@ final class AppModel: ObservableObject {
     @Published var isAuthenticated = false
     @Published var isBusy = false
     @Published var isSearching = false
+    @Published var isLoadingMoreSearchResults = false
+    @Published var hasMoreSearchResults = false
     @Published var errorMessage: String?
     @Published var recentPapers: [Paper] = []
     @Published var starredPapers: [Paper] = []
@@ -30,6 +32,8 @@ final class AppModel: ObservableObject {
 
     private var client = APIClient(baseURL: URL(string: "http://localhost:8001/")!)
     private var saveTasks: [String: Task<Void, Never>] = [:]
+    private var searchGeneration = UUID()
+    private let searchPageSize = 40
 
     var activeSession: PaperSession? {
         guard case let .paper(id) = route else { return nil }
@@ -88,6 +92,8 @@ final class AppModel: ObservableObject {
         libraryPapers = []
         chatOverviews = []
         searchResults = []
+        hasMoreSearchResults = false
+        isLoadingMoreSearchResults = false
         openSessions = []
         navigationHistory = []
         route = .start
@@ -157,26 +163,76 @@ final class AppModel: ObservableObject {
 
     func search(_ query: String) async {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let generation = UUID()
+        searchGeneration = generation
         guard !trimmed.isEmpty else {
             searchResults = []
             isSearching = false
+            isLoadingMoreSearchResults = false
+            hasMoreSearchResults = false
             return
         }
         isSearching = true
+        isLoadingMoreSearchResults = false
+        hasMoreSearchResults = false
         defer {
-            if searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed {
+            if searchGeneration == generation {
                 isSearching = false
             }
         }
         do {
-            let results = try await client.search(trimmed)
-            guard searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed else {
+            let response = try await client.search(
+                trimmed,
+                limit: searchPageSize,
+                offset: 0
+            )
+            guard searchGeneration == generation,
+                  searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed else {
                 return
             }
-            searchResults = results
-        } catch is CancellationError {
-            return
+            searchResults = response.results
+            hasMoreSearchResults = response.hasMore ?? (response.results.count == searchPageSize)
         } catch {
+            guard searchGeneration == generation,
+                  !Task.isCancelled,
+                  !Self.isCancellation(error) else { return }
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func loadMoreSearchResults() async {
+        let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, hasMoreSearchResults,
+              !isSearching, !isLoadingMoreSearchResults else { return }
+        let generation = searchGeneration
+        let offset = searchResults.count
+        isLoadingMoreSearchResults = true
+        defer {
+            if searchGeneration == generation {
+                isLoadingMoreSearchResults = false
+            }
+        }
+        do {
+            let response = try await client.search(
+                trimmed,
+                limit: searchPageSize,
+                offset: offset
+            )
+            guard searchGeneration == generation,
+                  searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed else {
+                return
+            }
+            let existingIDs = Set(searchResults.map(\.id))
+            searchResults.append(contentsOf: response.results.filter { !existingIDs.contains($0.id) })
+            hasMoreSearchResults = response.hasMore
+                ?? (response.results.count == searchPageSize)
+            if response.results.isEmpty {
+                hasMoreSearchResults = false
+            }
+        } catch {
+            guard searchGeneration == generation,
+                  !Task.isCancelled,
+                  !Self.isCancellation(error) else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -195,6 +251,14 @@ final class AppModel: ObservableObject {
                     occurrenceIndex: 0
                 )
             }
+        }
+    }
+
+    func open(searchPaper result: LibrarySearchResult) async {
+        guard let key = result.usableAttachmentKey else { return }
+        await perform {
+            let paper = try await client.resolve(attachmentKey: key)
+            _ = try await openPaper(paper, fromSidebar: false)
         }
     }
 
@@ -373,22 +437,43 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func searchPDF(_ query: String, in session: PaperSession) {
+    func searchPDF(_ query: String, in session: PaperSession) async {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let url = session.pdfURL,
-              let document = PDFDocument(url: url) else {
+        guard !trimmed.isEmpty, let url = session.pdfURL else {
             session.pdfSearchResults = []
             return
         }
+        let worker = Task.detached(priority: .userInitiated) {
+            Self.findPDFMatches(query: trimmed, url: url)
+        }
+        let results = await withTaskCancellationHandler {
+            await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+        guard !Task.isCancelled,
+              session.pdfSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed else {
+            return
+        }
+        session.pdfSearchResults = results
+    }
+
+    nonisolated private static func findPDFMatches(
+        query: String,
+        url: URL
+    ) -> [PDFSearchResult] {
+        guard let document = PDFDocument(url: url) else { return [] }
         var results: [PDFSearchResult] = []
         for pageIndex in 0..<document.pageCount {
+            guard !Task.isCancelled else { return [] }
             guard let text = document.page(at: pageIndex)?.string else { continue }
             let source = text as NSString
             var searchRange = NSRange(location: 0, length: source.length)
             var occurrence = 0
             while searchRange.length > 0 {
+                guard !Task.isCancelled else { return [] }
                 let found = source.range(
-                    of: trimmed,
+                    of: query,
                     options: [.caseInsensitive, .diacriticInsensitive],
                     range: searchRange
                 )
@@ -410,7 +495,7 @@ final class AppModel: ObservableObject {
                 searchRange = NSRange(location: next, length: source.length - next)
             }
         }
-        session.pdfSearchResults = results
+        return results
     }
 
     func selectPDFSearchResult(_ result: PDFSearchResult, in session: PaperSession) {
@@ -466,6 +551,12 @@ final class AppModel: ObservableObject {
         defer { isBusy = false }
         do { try await operation() }
         catch { errorMessage = error.localizedDescription }
+    }
+
+    nonisolated private static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        let error = error as NSError
+        return error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled
     }
 
     private func normalizedServerURL() -> URL? {

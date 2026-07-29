@@ -14,13 +14,29 @@ class ZoteroLibrary:
         token = self.settings.resolved_zotero_service_token
         return {"Authorization": f"Bearer {token}"} if token else {}
 
-    async def search(self, query: str, limit: int = 20) -> dict:
+    async def search(self, query: str, limit: int = 20, offset: int = 0) -> dict:
+        # The library service currently exposes a ranked top-N search rather than
+        # offset pagination. Fetch one item beyond the requested window so this
+        # API can present stable offset-based pagination to clients.
+        fetch_limit = min(offset + limit + 1, 100)
         async with httpx.AsyncClient(base_url=self.settings.zotero_library_url) as client:
             response = await client.get(
-                "/internal/search", params={"q": query, "limit": limit}, headers=self.headers
+                "/internal/search",
+                params={"q": query, "limit": fetch_limit},
+                headers=self.headers,
             )
             response.raise_for_status()
-            return response.json()
+            payload = response.json()
+        ranked_results = list(payload.get("results") or [])
+        page = ranked_results[offset : offset + limit]
+        return {
+            **payload,
+            "results": page,
+            "offset": offset,
+            "limit": limit,
+            "has_more": len(ranked_results) > offset + limit,
+            "next_offset": offset + len(page),
+        }
 
     async def papers(self, limit: int = 500, offset: int = 0) -> dict:
         async with httpx.AsyncClient(base_url=self.settings.zotero_library_url) as client:

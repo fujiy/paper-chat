@@ -104,8 +104,10 @@ async def search_library(
     q: SearchQuery,
     _: Session,
     settings: SettingsDependency,
+    limit: int = Query(default=40, ge=1, le=50),
+    offset: int = Query(default=0, ge=0, le=99),
 ):
-    return await ZoteroLibrary(settings).search(q)
+    return await ZoteroLibrary(settings).search(q, limit=limit, offset=offset)
 
 
 @app.get("/api/library/papers")

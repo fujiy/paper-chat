@@ -124,6 +124,8 @@ struct PageReference: Codable, Hashable, Sendable {
 
 struct LibrarySearchResponse: Codable, Sendable {
     let results: [LibrarySearchResult]
+    let hasMore: Bool?
+    let nextOffset: Int?
 }
 
 struct LibrarySearchResult: Codable, Identifiable, Sendable {
@@ -175,6 +177,13 @@ struct ChatOverview: Codable, Identifiable, Hashable, Sendable {
     let paperTitle: String
     let authors: [Creator]
     let year: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, backendType, backendStatus, isPrimary, lastUsedAt
+        case paperTitle, authors, year
+        case paperID = "paperId"
+        case backendThreadID = "backendThreadId"
+    }
 }
 
 struct ModelListResponse: Codable, Sendable {

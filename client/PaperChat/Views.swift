@@ -135,6 +135,7 @@ struct LibrarySidebar: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .listRowInsets(EdgeInsets(top: 2, leading: 12, bottom: 2, trailing: 10))
                         .listRowBackground(
                             model.route == .paper(paper.id)
                                 ? Color.accentColor.opacity(0.14)
@@ -180,12 +181,13 @@ struct SidebarButton: View {
     var body: some View {
         Button(action: action) {
             Label(title, systemImage: systemImage)
-                .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
                 .contentShape(Rectangle())
         }
-        .frame(maxWidth: .infinity, minHeight: 34)
+        .frame(maxWidth: .infinity, minHeight: 28)
         .contentShape(Rectangle())
         .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(top: 1, leading: 12, bottom: 1, trailing: 10))
         .listRowBackground(selected ? Color.accentColor.opacity(0.14) : Color.clear)
     }
 }
@@ -408,9 +410,10 @@ struct SearchField: View {
 struct LibrarySearchPage: View {
     @EnvironmentObject private var model: AppModel
     @FocusState private var searchFocused: Bool
+    @State private var expandedPaperIDs: Set<String> = []
 
     private var groups: [SearchPaperGroup] {
-        SearchPaperGroup.group(model.searchResults)
+        SearchPaperGroup.group(model.searchResults, query: model.searchQuery)
     }
 
     var body: some View {
@@ -441,7 +444,28 @@ struct LibrarySearchPage: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 18) {
                             ForEach(groups) { group in
-                                SearchPaperSection(group: group, query: model.searchQuery)
+                                SearchPaperSection(
+                                    group: group,
+                                    query: model.searchQuery,
+                                    isExpanded: expandedPaperIDs.contains(group.id)
+                                ) {
+                                    withAnimation(.snappy) {
+                                        if expandedPaperIDs.contains(group.id) {
+                                            expandedPaperIDs.remove(group.id)
+                                        } else {
+                                            expandedPaperIDs.insert(group.id)
+                                        }
+                                    }
+                                }
+                            }
+                            if model.hasMoreSearchResults {
+                                ProgressView()
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .id(model.searchResults.count)
+                                    .task(id: model.searchResults.count) {
+                                        await model.loadMoreSearchResults()
+                                    }
                             }
                         }
                         .frame(maxWidth: 860)
@@ -469,23 +493,44 @@ struct SearchPaperSection: View {
     @EnvironmentObject private var model: AppModel
     let group: SearchPaperGroup
     let query: String
+    let isExpanded: Bool
+    let toggleExpanded: () -> Void
+
+    private var visibleResults: ArraySlice<LibrarySearchResult> {
+        group.results.prefix(isExpanded ? group.results.count : 5)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(group.title)
-                    .font(.headline)
-                    .lineLimit(2)
-                Text(paperMetadata(group.creators, group.year))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            Button {
+                Task { await model.open(searchPaper: group.representative) }
+            } label: {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HighlightedSnippet(text: group.title, query: query)
+                            .font(.headline)
+                            .lineLimit(2)
+                        HighlightedSnippet(
+                            text: paperMetadata(group.creators, group.year),
+                            query: query
+                        )
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "arrow.up.right.square")
+                        .foregroundStyle(.secondary)
+                }
+                .padding(14)
+                .contentShape(Rectangle())
             }
-            .padding(14)
+            .buttonStyle(.plain)
+            .disabled(group.representative.usableAttachmentKey == nil)
 
             Divider()
 
-            ForEach(group.results) { result in
+            ForEach(visibleResults) { result in
                 Button {
                     Task { await model.open(searchResult: result) }
                 } label: {
@@ -511,6 +556,19 @@ struct SearchPaperSection: View {
                 }
                 .buttonStyle(.plain)
                 Divider().padding(.leading, 68)
+            }
+
+            if group.results.count > 5 {
+                Button(
+                    isExpanded ? "Show less" : "Show \(group.results.count - 5) more",
+                    systemImage: isExpanded ? "chevron.up" : "chevron.down",
+                    action: toggleExpanded
+                )
+                .font(.caption.weight(.medium))
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
             }
         }
         .background(.quaternary.opacity(0.38), in: RoundedRectangle(cornerRadius: 12))
@@ -542,7 +600,6 @@ struct HighlightedSnippet: View {
                   ) {
                 if let attributedRange = Range(range, in: result) {
                     result[attributedRange].backgroundColor = .yellow.opacity(0.45)
-                    result[attributedRange].font = .body.bold()
                 }
                 searchStart = range.upperBound
             }
@@ -557,24 +614,71 @@ struct SearchPaperGroup: Identifiable {
     let creators: [Creator]
     let year: String?
     let results: [LibrarySearchResult]
+    let representative: LibrarySearchResult
+    let firstResultIndex: Int
+    let metadataMatchScore: Int
 
-    static func group(_ results: [LibrarySearchResult]) -> [SearchPaperGroup] {
-        let grouped = Dictionary(grouping: results) {
-            "\($0.displayTitle.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current))|\($0.year ?? "")|\($0.usableAttachmentKey ?? "")"
+    static func group(
+        _ results: [LibrarySearchResult],
+        query: String
+    ) -> [SearchPaperGroup] {
+        var grouped: [String: [(Int, LibrarySearchResult)]] = [:]
+        var keyOrder: [String] = []
+        for (index, result) in results.enumerated() {
+            let key = "\(result.displayTitle.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current))|\(result.year ?? "")|\(result.usableAttachmentKey ?? "")"
+            if grouped[key] == nil { keyOrder.append(key) }
+            grouped[key, default: []].append((index, result))
         }
-        return grouped.map { key, values in
-            let first = values[0]
+        return keyOrder.compactMap { key in
+            guard let indexedValues = grouped[key], let first = indexedValues.first else {
+                return nil
+            }
+            let values = indexedValues.map(\.1)
             return SearchPaperGroup(
                 id: key,
-                title: first.displayTitle,
-                creators: first.creators ?? [],
-                year: first.year,
+                title: first.1.displayTitle,
+                creators: first.1.creators ?? [],
+                year: first.1.year,
                 results: values.sorted {
                     ($0.matchedPage ?? $0.pageStart ?? 0) < ($1.matchedPage ?? $1.pageStart ?? 0)
-                }
+                },
+                representative: first.1,
+                firstResultIndex: first.0,
+                metadataMatchScore: metadataScore(for: first.1, query: query)
             )
         }
-        .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        .sorted {
+            if $0.metadataMatchScore != $1.metadataMatchScore {
+                return $0.metadataMatchScore > $1.metadataMatchScore
+            }
+            return $0.firstResultIndex < $1.firstResultIndex
+        }
+    }
+
+    private static func metadataScore(
+        for result: LibrarySearchResult,
+        query: String
+    ) -> Int {
+        let normalizedQuery = query.folding(
+            options: [.caseInsensitive, .diacriticInsensitive],
+            locale: .current
+        )
+        let terms = normalizedQuery.split(whereSeparator: \.isWhitespace)
+            .map(String.init)
+            .filter { $0.count > 1 }
+        let title = result.displayTitle.folding(
+            options: [.caseInsensitive, .diacriticInsensitive],
+            locale: .current
+        )
+        let authors = (result.creators ?? []).map(\.displayName).joined(separator: " ").folding(
+            options: [.caseInsensitive, .diacriticInsensitive],
+            locale: .current
+        )
+        var score = title.contains(normalizedQuery) ? 100 : 0
+        score += authors.contains(normalizedQuery) ? 80 : 0
+        score += terms.filter(title.contains).count * 12
+        score += terms.filter(authors.contains).count * 8
+        return score
     }
 }
 
@@ -985,7 +1089,7 @@ struct PDFSearchPanel: View {
         .task(id: session.pdfSearchQuery) {
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled else { return }
-            model.searchPDF(session.pdfSearchQuery, in: session)
+            await model.searchPDF(session.pdfSearchQuery, in: session)
         }
     }
 }
