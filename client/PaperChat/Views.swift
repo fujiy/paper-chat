@@ -147,9 +147,8 @@ struct LibrarySidebar: View {
         }
         .listStyle(.sidebar)
         .navigationTitle("")
-        .safeAreaInset(edge: .top, spacing: 0) {
-            HStack {
-                Spacer()
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
                 Menu {
                     Button("Refresh Library", systemImage: "arrow.clockwise") {
                         Task { await model.refreshLibrary() }
@@ -165,9 +164,6 @@ struct LibrarySidebar: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
             }
-            .frame(height: 34)
-            .padding(.horizontal, 10)
-            .background(.bar)
         }
     }
 }
@@ -412,9 +408,7 @@ struct LibrarySearchPage: View {
     @FocusState private var searchFocused: Bool
     @State private var expandedPaperIDs: Set<String> = []
 
-    private var groups: [SearchPaperGroup] {
-        SearchPaperGroup.group(model.searchResults, query: model.searchQuery)
-    }
+    private var groups: [LibrarySearchPaper] { model.searchPapers }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -459,13 +453,32 @@ struct LibrarySearchPage: View {
                                 }
                             }
                             if model.hasMoreSearchResults {
-                                ProgressView()
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 12)
-                                    .id(model.searchResults.count)
-                                    .task(id: model.searchResults.count) {
-                                        await model.loadMoreSearchResults()
+                                HStack(spacing: 8) {
+                                    if model.isLoadingMoreSearchResults {
+                                        ProgressView().controlSize(.small)
+                                        Text("Loading more results…")
+                                    } else {
+                                        Image(systemName: "arrow.down.circle")
+                                        Text("Scroll to load more")
                                     }
+                                }
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .id(model.searchPapers.count)
+                                .task(id: model.searchPapers.count) {
+                                    await model.loadMoreSearchResults()
+                                }
+                            } else if !model.isSearching {
+                                Label(
+                                    allResultsSummary,
+                                    systemImage: "checkmark.circle"
+                                )
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
                             }
                         }
                         .frame(maxWidth: 860)
@@ -478,6 +491,7 @@ struct LibrarySearchPage: View {
         .onAppear { searchFocused = true }
         .onChange(of: model.searchFocusToken) { searchFocused = true }
         .task(id: model.searchQuery) {
+            model.prepareSearch(for: model.searchQuery)
             do {
                 try await Task.sleep(for: .milliseconds(250))
                 guard !Task.isCancelled else { return }
@@ -487,23 +501,30 @@ struct LibrarySearchPage: View {
             }
         }
     }
+
+    private var allResultsSummary: String {
+        let matches = model.searchResultTotal
+            ?? model.searchPapers.reduce(0) { $0 + $1.matchCount }
+        let papers = model.searchPaperCount ?? groups.count
+        return "All results loaded · \(papers) papers, \(matches) matches"
+    }
 }
 
 struct SearchPaperSection: View {
     @EnvironmentObject private var model: AppModel
-    let group: SearchPaperGroup
+    let group: LibrarySearchPaper
     let query: String
     let isExpanded: Bool
     let toggleExpanded: () -> Void
 
     private var visibleResults: ArraySlice<LibrarySearchResult> {
-        group.results.prefix(isExpanded ? group.results.count : 5)
+        group.evidence.prefix(isExpanded ? group.evidence.count : 5)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                Task { await model.open(searchPaper: group.representative) }
+                Task { await model.open(searchPaper: group) }
             } label: {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -526,7 +547,7 @@ struct SearchPaperSection: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(group.representative.usableAttachmentKey == nil)
+            .disabled(group.attachmentKey == nil && group.representative?.usableAttachmentKey == nil)
 
             Divider()
 
@@ -558,9 +579,9 @@ struct SearchPaperSection: View {
                 Divider().padding(.leading, 68)
             }
 
-            if group.results.count > 5 {
+            if group.evidence.count > 5 {
                 Button(
-                    isExpanded ? "Show less" : "Show \(group.results.count - 5) more",
+                    isExpanded ? "Show less" : "Show \(group.evidence.count - 5) more",
                     systemImage: isExpanded ? "chevron.up" : "chevron.down",
                     action: toggleExpanded
                 )
@@ -605,80 +626,6 @@ struct HighlightedSnippet: View {
             }
         }
         return result
-    }
-}
-
-struct SearchPaperGroup: Identifiable {
-    let id: String
-    let title: String
-    let creators: [Creator]
-    let year: String?
-    let results: [LibrarySearchResult]
-    let representative: LibrarySearchResult
-    let firstResultIndex: Int
-    let metadataMatchScore: Int
-
-    static func group(
-        _ results: [LibrarySearchResult],
-        query: String
-    ) -> [SearchPaperGroup] {
-        var grouped: [String: [(Int, LibrarySearchResult)]] = [:]
-        var keyOrder: [String] = []
-        for (index, result) in results.enumerated() {
-            let key = "\(result.displayTitle.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current))|\(result.year ?? "")|\(result.usableAttachmentKey ?? "")"
-            if grouped[key] == nil { keyOrder.append(key) }
-            grouped[key, default: []].append((index, result))
-        }
-        return keyOrder.compactMap { key in
-            guard let indexedValues = grouped[key], let first = indexedValues.first else {
-                return nil
-            }
-            let values = indexedValues.map(\.1)
-            return SearchPaperGroup(
-                id: key,
-                title: first.1.displayTitle,
-                creators: first.1.creators ?? [],
-                year: first.1.year,
-                results: values.sorted {
-                    ($0.matchedPage ?? $0.pageStart ?? 0) < ($1.matchedPage ?? $1.pageStart ?? 0)
-                },
-                representative: first.1,
-                firstResultIndex: first.0,
-                metadataMatchScore: metadataScore(for: first.1, query: query)
-            )
-        }
-        .sorted {
-            if $0.metadataMatchScore != $1.metadataMatchScore {
-                return $0.metadataMatchScore > $1.metadataMatchScore
-            }
-            return $0.firstResultIndex < $1.firstResultIndex
-        }
-    }
-
-    private static func metadataScore(
-        for result: LibrarySearchResult,
-        query: String
-    ) -> Int {
-        let normalizedQuery = query.folding(
-            options: [.caseInsensitive, .diacriticInsensitive],
-            locale: .current
-        )
-        let terms = normalizedQuery.split(whereSeparator: \.isWhitespace)
-            .map(String.init)
-            .filter { $0.count > 1 }
-        let title = result.displayTitle.folding(
-            options: [.caseInsensitive, .diacriticInsensitive],
-            locale: .current
-        )
-        let authors = (result.creators ?? []).map(\.displayName).joined(separator: " ").folding(
-            options: [.caseInsensitive, .diacriticInsensitive],
-            locale: .current
-        )
-        var score = title.contains(normalizedQuery) ? 100 : 0
-        score += authors.contains(normalizedQuery) ? 80 : 0
-        score += terms.filter(title.contains).count * 12
-        score += terms.filter(authors.contains).count * 8
-        return score
     }
 }
 
@@ -1246,13 +1193,18 @@ struct ChatComposer: View {
                     if session.draft.isEmpty {
                         Text("Ask about page \(session.pageIndex + 1)…")
                             .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 8)
+                            .font(.system(size: 16))
+                            .padding(.horizontal, 6)
+                            .padding(.top, 9)
                     }
                     TextEditor(text: $session.draft)
                         .focused($editorFocused)
+                        .font(.system(size: 16))
+                        .lineSpacing(3)
                         .scrollContentBackground(.hidden)
-                        .frame(minHeight: 62, maxHeight: 150)
+                        .padding(.horizontal, 1)
+                        .padding(.top, 3)
+                        .frame(minHeight: 72, maxHeight: 170)
                 }
 
                 HStack(spacing: 8) {
@@ -1364,8 +1316,13 @@ struct MessageBubble: View {
         HStack {
             if message.role == "user" { Spacer(minLength: 32) }
             VStack(alignment: .leading, spacing: 7) {
-                Text(message.content.isEmpty ? "…" : message.content)
-                    .textSelection(.enabled)
+                if message.content.isEmpty {
+                    ProgressView()
+                        .controlSize(.small)
+                        .padding(.vertical, 2)
+                } else {
+                    ChatRichText(source: message.content)
+                }
                 if message.role == "assistant", !citedPages.isEmpty {
                     HStack {
                         ForEach(citedPages, id: \.self) { page in

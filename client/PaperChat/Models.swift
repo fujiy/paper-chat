@@ -123,9 +123,25 @@ struct PageReference: Codable, Hashable, Sendable {
 }
 
 struct LibrarySearchResponse: Codable, Sendable {
-    let results: [LibrarySearchResult]
+    let papers: [LibrarySearchPaper]
     let hasMore: Bool?
     let nextOffset: Int?
+    let total: Int?
+    let paperCount: Int?
+}
+
+struct LibrarySearchPaper: Codable, Identifiable, Sendable {
+    var id: String { attachmentKey ?? itemKey ?? title }
+    let itemKey: String?
+    let attachmentKey: String?
+    let title: String
+    let creators: [Creator]
+    let year: String?
+    let evidence: [LibrarySearchResult]
+    let matchCount: Int
+    let hasMoreEvidence: Bool
+
+    var representative: LibrarySearchResult? { evidence.first }
 }
 
 struct LibrarySearchResult: Codable, Identifiable, Sendable {

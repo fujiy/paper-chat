@@ -12,12 +12,14 @@ final class AppModel: ObservableObject {
     @Published var isSearching = false
     @Published var isLoadingMoreSearchResults = false
     @Published var hasMoreSearchResults = false
+    @Published var searchResultTotal: Int?
+    @Published var searchPaperCount: Int?
     @Published var errorMessage: String?
     @Published var recentPapers: [Paper] = []
     @Published var starredPapers: [Paper] = []
     @Published var libraryPapers: [LibraryPaper] = []
     @Published var chatOverviews: [ChatOverview] = []
-    @Published var searchResults: [LibrarySearchResult] = []
+    @Published var searchPapers: [LibrarySearchPaper] = []
     @Published var searchQuery = ""
     @Published var searchFocusToken = UUID()
     @Published var route: WorkspaceRoute = .start
@@ -34,6 +36,7 @@ final class AppModel: ObservableObject {
     private var saveTasks: [String: Task<Void, Never>] = [:]
     private var searchGeneration = UUID()
     private let searchPageSize = 40
+    private var searchNextOffset = 0
 
     var activeSession: PaperSession? {
         guard case let .paper(id) = route else { return nil }
@@ -91,9 +94,12 @@ final class AppModel: ObservableObject {
         starredPapers = []
         libraryPapers = []
         chatOverviews = []
-        searchResults = []
+        searchPapers = []
         hasMoreSearchResults = false
         isLoadingMoreSearchResults = false
+        searchResultTotal = nil
+        searchPaperCount = nil
+        searchNextOffset = 0
         openSessions = []
         navigationHistory = []
         route = .start
@@ -161,15 +167,29 @@ final class AppModel: ObservableObject {
         route = destination
     }
 
+    func prepareSearch(for query: String) {
+        searchGeneration = UUID()
+        searchPapers = []
+        hasMoreSearchResults = false
+        isLoadingMoreSearchResults = false
+        searchResultTotal = nil
+        searchPaperCount = nil
+        searchNextOffset = 0
+        isSearching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     func search(_ query: String) async {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let generation = UUID()
         searchGeneration = generation
         guard !trimmed.isEmpty else {
-            searchResults = []
+            searchPapers = []
             isSearching = false
             isLoadingMoreSearchResults = false
             hasMoreSearchResults = false
+            searchResultTotal = nil
+            searchPaperCount = nil
+            searchNextOffset = 0
             return
         }
         isSearching = true
@@ -190,8 +210,12 @@ final class AppModel: ObservableObject {
                   searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed else {
                 return
             }
-            searchResults = response.results
-            hasMoreSearchResults = response.hasMore ?? (response.results.count == searchPageSize)
+            isSearching = false
+            searchPapers = response.papers
+            hasMoreSearchResults = response.hasMore ?? (response.papers.count == searchPageSize)
+            searchNextOffset = response.nextOffset ?? response.papers.count
+            searchResultTotal = response.total
+            searchPaperCount = response.paperCount
         } catch {
             guard searchGeneration == generation,
                   !Task.isCancelled,
@@ -205,7 +229,7 @@ final class AppModel: ObservableObject {
         guard !trimmed.isEmpty, hasMoreSearchResults,
               !isSearching, !isLoadingMoreSearchResults else { return }
         let generation = searchGeneration
-        let offset = searchResults.count
+        let offset = searchNextOffset
         isLoadingMoreSearchResults = true
         defer {
             if searchGeneration == generation {
@@ -222,11 +246,14 @@ final class AppModel: ObservableObject {
                   searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed else {
                 return
             }
-            let existingIDs = Set(searchResults.map(\.id))
-            searchResults.append(contentsOf: response.results.filter { !existingIDs.contains($0.id) })
+            let existingIDs = Set(searchPapers.map(\.id))
+            searchPapers.append(contentsOf: response.papers.filter { !existingIDs.contains($0.id) })
             hasMoreSearchResults = response.hasMore
-                ?? (response.results.count == searchPageSize)
-            if response.results.isEmpty {
+                ?? (response.papers.count == searchPageSize)
+            searchNextOffset = response.nextOffset ?? (offset + response.papers.count)
+            searchResultTotal = response.total
+            searchPaperCount = response.paperCount
+            if response.papers.isEmpty {
                 hasMoreSearchResults = false
             }
         } catch {
@@ -254,8 +281,10 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func open(searchPaper result: LibrarySearchResult) async {
-        guard let key = result.usableAttachmentKey else { return }
+    func open(searchPaper result: LibrarySearchPaper) async {
+        guard let key = result.attachmentKey ?? result.representative?.usableAttachmentKey else {
+            return
+        }
         await perform {
             let paper = try await client.resolve(attachmentKey: key)
             _ = try await openPaper(paper, fromSidebar: false)

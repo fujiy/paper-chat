@@ -49,28 +49,36 @@ def client_for(tmp_path, monkeypatch) -> TestClient:
             ]
         }
 
-    async def search(self, query, limit=20, offset=0):
-        results = [
+    async def search(
+        self,
+        query,
+        limit=20,
+        offset=0,
+        evidence_limit=5,
+        caller="paperchat",
+    ):
+        papers = [
             {
-                "title": f"Test Paper, p. {index + 1}",
-                "paper_title": "Test Paper",
+                "item_key": f"ITEM{index + 1}",
+                "attachment_key": f"ATT{index + 1}",
+                "title": f"Test Paper {index + 1}",
                 "creators": [{"name": "Ada Lovelace"}],
                 "year": "1843",
-                "resolved_attachment_key": "ATT1",
-                "page_start": index + 1,
-                "page_end": index + 1,
-                "matched_page": index + 1,
-                "snippet": f"Result {index + 1} for {query}",
-                "highlight_query": query,
+                "evidence": [],
+                "match_count": 1,
+                "has_more_evidence": False,
             }
             for index in range(offset, offset + limit)
         ]
         return {
-            "results": results,
+            "papers": papers,
             "offset": offset,
             "limit": limit,
             "has_more": offset + limit < 100,
-            "next_offset": offset + len(results),
+            "next_offset": offset + len(papers),
+            "total": 100,
+            "paper_count": 10,
+            "evidence_limit": evidence_limit,
         }
 
     monkeypatch.setattr("paperchat.library.ZoteroLibrary.metadata", metadata)
@@ -200,8 +208,8 @@ def test_library_search_supports_pagination(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     payload = response.json()
-    assert len(payload["results"]) == 40
-    assert payload["results"][0]["matched_page"] == 41
+    assert len(payload["papers"]) == 40
+    assert payload["papers"][0]["attachment_key"] == "ATT41"
     assert payload["has_more"] is True
     assert payload["next_offset"] == 80
 

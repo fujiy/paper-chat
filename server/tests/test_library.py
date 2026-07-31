@@ -14,7 +14,18 @@ async def test_search_adapts_ranked_top_n_to_offset_pagination(tmp_path, monkeyp
             return None
 
         def json(self):
-            return {"results": [{"rank": index} for index in range(81)]}
+            return {
+                "papers": [
+                    {
+                        "rank": index,
+                        "item_key": f"item-{index}",
+                        "attachment_key": f"paper-{index}",
+                        "match_count": index + 1,
+                        "evidence": [],
+                    }
+                    for index in range(100)
+                ]
+            }
 
     class Client:
         def __init__(self, *, base_url):
@@ -37,9 +48,22 @@ async def test_search_adapts_ranked_top_n_to_offset_pagination(tmp_path, monkeyp
         _env_file=None,
     )
 
-    result = await ZoteroLibrary(settings).search("engine", limit=40, offset=40)
+    result = await ZoteroLibrary(settings).search(
+        "engine",
+        limit=15,
+        offset=20,
+        evidence_limit=3,
+        caller="paperchat-test",
+    )
 
-    assert requested["params"] == {"q": "engine", "limit": 81}
-    assert [item["rank"] for item in result["results"]] == list(range(40, 80))
+    assert requested["params"] == {
+        "q": "engine",
+        "limit": 100,
+        "evidence_limit": 3,
+        "caller": "paperchat-test",
+    }
+    assert [item["rank"] for item in result["papers"]] == list(range(20, 35))
     assert result["has_more"] is True
-    assert result["next_offset"] == 80
+    assert result["next_offset"] == 35
+    assert result["total"] == sum(range(1, 101))
+    assert result["paper_count"] == 100

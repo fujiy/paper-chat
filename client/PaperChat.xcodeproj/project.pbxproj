@@ -17,6 +17,8 @@
 		A10000000000000000000008 /* Views.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* Views.swift */; };
 		A10000000000000000000009 /* PDFKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* PDFKit.framework */; };
 		A1000000000000000000000A /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* Security.framework */; };
+		A1000000000000000000000B /* SwiftMath in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000001 /* SwiftMath */; };
+		A1000000000000000000000C /* RichTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* RichTextView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -32,6 +34,7 @@
 		A20000000000000000000010 /* PDFKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = PDFKit.framework; path = System/Library/Frameworks/PDFKit.framework; sourceTree = SDKROOT; };
 		A20000000000000000000011 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		A20000000000000000000012 /* PaperChat.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PaperChat.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000013 /* RichTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RichTextView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -41,6 +44,7 @@
 			files = (
 				A10000000000000000000009 /* PDFKit.framework in Frameworks */,
 				A1000000000000000000000A /* Security.framework in Frameworks */,
+				A1000000000000000000000B /* SwiftMath in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -67,6 +71,7 @@
 				A20000000000000000000006 /* AppModel.swift */,
 				A20000000000000000000007 /* PDFKitView.swift */,
 				A20000000000000000000008 /* Views.swift */,
+				A20000000000000000000013 /* RichTextView.swift */,
 				A20000000000000000000009 /* Info.plist */,
 			);
 			path = PaperChat;
@@ -105,6 +110,9 @@
 			dependencies = (
 			);
 			name = PaperChat;
+			packageProductDependencies = (
+				B10000000000000000000001 /* SwiftMath */,
+			);
 			productName = PaperChat;
 			productReference = A20000000000000000000012 /* PaperChat.app */;
 			productType = "com.apple.product-type.application";
@@ -134,6 +142,9 @@
 			);
 			mainGroup = A40000000000000000000001;
 			productRefGroup = A40000000000000000000004 /* Products */;
+			packageReferences = (
+				C10000000000000000000001 /* XCRemoteSwiftPackageReference "SwiftMath" */,
+			);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -165,10 +176,30 @@
 				A10000000000000000000006 /* AppModel.swift in Sources */,
 				A10000000000000000000007 /* PDFKitView.swift in Sources */,
 				A10000000000000000000008 /* Views.swift in Sources */,
+				A1000000000000000000000C /* RichTextView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		C10000000000000000000001 /* XCRemoteSwiftPackageReference "SwiftMath" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mgriebling/SwiftMath.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.7.3;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B10000000000000000000001 /* SwiftMath */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C10000000000000000000001 /* XCRemoteSwiftPackageReference "SwiftMath" */;
+			productName = SwiftMath;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		AA0000000000000000000001 /* Debug */ = {

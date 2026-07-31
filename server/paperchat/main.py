@@ -106,8 +106,16 @@ async def search_library(
     settings: SettingsDependency,
     limit: int = Query(default=40, ge=1, le=50),
     offset: int = Query(default=0, ge=0, le=99),
+    evidence_limit: int = Query(default=5, ge=1, le=10),
+    caller: str | None = Query(default="paperchat", max_length=100),
 ):
-    return await ZoteroLibrary(settings).search(q, limit=limit, offset=offset)
+    return await ZoteroLibrary(settings).search(
+        q,
+        limit=limit,
+        offset=offset,
+        evidence_limit=evidence_limit,
+        caller=caller,
+    )
 
 
 @app.get("/api/library/papers")

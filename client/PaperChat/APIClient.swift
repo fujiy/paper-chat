@@ -53,6 +53,8 @@ actor APIClient {
             URLQueryItem(name: "q", value: query),
             URLQueryItem(name: "limit", value: String(limit)),
             URLQueryItem(name: "offset", value: String(offset)),
+            URLQueryItem(name: "evidence_limit", value: "5"),
+            URLQueryItem(name: "caller", value: "paperchat-swift"),
         ]
         let queryString = components.percentEncodedQuery ?? ""
         return try await request("api/library/search?\(queryString)")
