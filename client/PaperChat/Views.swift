@@ -1336,23 +1336,14 @@ struct MessageBubble: View {
                             .controlSize(.small)
                             .padding(.vertical, 2)
                     } else {
-                        ChatRichText(source: message.content)
+                        ChatRichText(source: message.content) { page in
+                            model.pageChanged(page - 1, in: session)
+                        }
                     }
                     if message.status == "failed", !message.content.isEmpty {
                         Label("Response interrupted", systemImage: "exclamationmark.triangle")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                    }
-                    if message.role == "assistant", !citedPages.isEmpty {
-                        HStack {
-                            ForEach(citedPages, id: \.self) { page in
-                                Button("p. \(page)") {
-                                    model.pageChanged(page - 1, in: session)
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                            }
-                        }
                     }
                 }
                 .padding(10)
@@ -1381,16 +1372,6 @@ struct MessageBubble: View {
             }
             if message.role != "user" { Spacer(minLength: 32) }
         }
-    }
-
-    private var citedPages: [Int] {
-        let pattern = #"\[p\.\s*(\d+)\]"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-        let range = NSRange(message.content.startIndex..., in: message.content)
-        return Array(Set(regex.matches(in: message.content, range: range).compactMap { match in
-            guard let range = Range(match.range(at: 1), in: message.content) else { return nil }
-            return Int(message.content[range])
-        })).sorted()
     }
 
     private var messageTimestamp: String {

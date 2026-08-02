@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ChatRichText: View {
     let source: String
+    let onOpenPage: (Int) -> Void
 
     private var blocks: [ChatRichBlock] {
         ChatRichBlock.parse(source)
@@ -13,10 +14,11 @@ struct ChatRichText: View {
             ForEach(blocks) { block in
                 switch block.kind {
                 case let .markdown(content):
-                    if InlineMathDocument.containsMath(in: content) {
-                        InlineMathText(source: content, fontSize: 16)
+                    let linkedContent = PageCitationLinks.markdown(in: content)
+                    if InlineMathDocument.containsMath(in: linkedContent) {
+                        InlineMathText(source: linkedContent, fontSize: 16)
                     } else {
-                        Text(markdown(content))
+                        Text(markdown(linkedContent))
                             .font(.body)
                             .textSelection(.enabled)
                     }
@@ -47,6 +49,13 @@ struct ChatRichText: View {
                 }
             }
         }
+        .environment(\.openURL, OpenURLAction { url in
+            guard let page = PageCitationLinks.pageNumber(from: url) else {
+                return .systemAction
+            }
+            onOpenPage(page)
+            return .handled
+        })
     }
 
     private func markdown(_ content: String) -> AttributedString {
@@ -57,6 +66,26 @@ struct ChatRichText: View {
                 failurePolicy: .returnPartiallyParsedIfPossible
             )
         )) ?? AttributedString(content)
+    }
+}
+
+private enum PageCitationLinks {
+    private static let scheme = "paperchat"
+
+    static func markdown(in source: String) -> String {
+        source.replacingOccurrences(
+            of: #"\[p\.\s*(\d+)\](?!\()"#,
+            with: #"[p. $1](paperchat://page/$1)"#,
+            options: .regularExpression
+        )
+    }
+
+    static func pageNumber(from url: URL) -> Int? {
+        guard url.scheme == scheme, url.host == "page",
+              let page = Int(url.lastPathComponent), page > 0 else {
+            return nil
+        }
+        return page
     }
 }
 
