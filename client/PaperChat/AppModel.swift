@@ -220,7 +220,7 @@ final class AppModel: ObservableObject {
             guard searchGeneration == generation,
                   !Task.isCancelled,
                   !Self.isCancellation(error) else { return }
-            errorMessage = error.localizedDescription
+            report(error)
         }
     }
 
@@ -260,7 +260,7 @@ final class AppModel: ObservableObject {
             guard searchGeneration == generation,
                   !Task.isCancelled,
                   !Self.isCancellation(error) else { return }
-            errorMessage = error.localizedDescription
+            report(error)
         }
     }
 
@@ -316,6 +316,9 @@ final class AppModel: ObservableObject {
     @discardableResult
     private func openPaper(_ paper: Paper, fromSidebar: Bool) async throws -> PaperSession {
         if let existing = openSessions.first(where: { $0.id == paper.id }) {
+            if !fromSidebar {
+                promoteInRecent(existing.paper)
+            }
             navigate(to: .paper(existing.id), fromSidebar: fromSidebar)
             return existing
         }
@@ -333,11 +336,17 @@ final class AppModel: ObservableObject {
             let (data, etag) = try await client.downloadPDF(paperID: detail.id)
             session.pdfURL = try await PDFCache.shared.store(data, paperID: detail.id, etag: etag)
         }
-        recentPapers.removeAll(where: { $0.id == detail.id })
-        recentPapers.insert(detail, at: 0)
+        if !fromSidebar {
+            promoteInRecent(detail)
+        }
         openSessions.append(session)
         navigate(to: .paper(session.id), fromSidebar: fromSidebar)
         return session
+    }
+
+    private func promoteInRecent(_ paper: Paper) {
+        recentPapers.removeAll(where: { $0.id == paper.id })
+        recentPapers.insert(paper, at: 0)
     }
 
     func toggleStar(in session: PaperSession) async {
@@ -357,7 +366,7 @@ final class AppModel: ObservableObject {
                 starredPapers.removeAll(where: { $0.id == session.id })
             }
         } catch {
-            errorMessage = error.localizedDescription
+            report(error)
         }
     }
 
@@ -395,6 +404,7 @@ final class AppModel: ObservableObject {
     func send(in session: PaperSession) async {
         let question = session.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { return }
+        var messageCountBeforeSend = session.messages.count
 
         do {
             let thread: ChatThread
@@ -433,6 +443,7 @@ final class AppModel: ObservableObject {
             )
             session.messages.append(assistant)
             let assistantIndex = session.messages.count - 1
+            messageCountBeforeSend = assistantIndex - 1
             for try await event in await client.streamMessage(
                 threadID: thread.id,
                 content: question,
@@ -445,8 +456,12 @@ final class AppModel: ObservableObject {
                 case let .delta(text):
                     assistant.content += text
                     session.messages[assistantIndex] = assistant
-                case let .failure(detail):
-                    errorMessage = detail
+                case .failure:
+                    assistant.status = "failed"
+                    session.messages[assistantIndex] = assistant
+                    if let messages = try? await client.messages(threadID: thread.id) {
+                        session.messages = messages
+                    }
                 case .done:
                     session.messages = try await client.messages(threadID: thread.id)
                     await refreshChatOverviews()
@@ -455,8 +470,17 @@ final class AppModel: ObservableObject {
                 }
             }
         } catch {
-            session.draft = question
-            errorMessage = error.localizedDescription
+            if let thread = session.selectedThread,
+               let messages = try? await client.messages(threadID: thread.id) {
+                let requestReachedServer = messages.count > messageCountBeforeSend
+                session.messages = messages
+                if !requestReachedServer {
+                    session.draft = question
+                }
+            } else {
+                session.draft = question
+                session.messages = Array(session.messages.prefix(messageCountBeforeSend))
+            }
         }
     }
 
@@ -579,7 +603,14 @@ final class AppModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         do { try await operation() }
-        catch { errorMessage = error.localizedDescription }
+        catch { report(error) }
+    }
+
+    private func report(_ error: Error) {
+        if let apiError = error as? APIError, apiError.isTransient {
+            return
+        }
+        errorMessage = error.localizedDescription
     }
 
     nonisolated private static func isCancellation(_ error: Error) -> Bool {

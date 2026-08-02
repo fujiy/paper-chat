@@ -14,30 +14,20 @@ struct ChatRichText: View {
                 switch block.kind {
                 case let .markdown(content):
                     if InlineMathDocument.containsMath(in: content) {
-                        ScrollView(.horizontal) {
-                            MathTypesetView(
-                                latex: InlineMathDocument.latex(from: content),
-                                mode: .text,
-                                fontSize: 16
-                            )
-                            .fixedSize(horizontal: true, vertical: false)
-                        }
-                        .scrollIndicators(.automatic)
+                        InlineMathText(source: content, fontSize: 16)
                     } else {
                         Text(markdown(content))
                             .font(.body)
                             .textSelection(.enabled)
                     }
                 case let .math(content):
-                    ScrollView(.horizontal) {
-                        MathTypesetView(
-                            latex: content,
-                            mode: .display,
-                            fontSize: 17
-                        )
-                        .fixedSize(horizontal: true, vertical: false)
-                    }
-                    .scrollIndicators(.automatic)
+                    MathTypesetView(
+                        latex: content,
+                        mode: .display,
+                        fontSize: 17
+                    )
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(maxWidth: .infinity, alignment: .center)
                 case let .code(language, content):
                     VStack(alignment: .leading, spacing: 5) {
                         if !language.isEmpty {
@@ -67,6 +57,17 @@ struct ChatRichText: View {
                 failurePolicy: .returnPartiallyParsedIfPossible
             )
         )) ?? AttributedString(content)
+    }
+}
+
+private struct InlineMathText: View {
+    let source: String
+    let fontSize: CGFloat
+
+    var body: some View {
+        InlineMathDocument.text(from: source, fontSize: fontSize)
+            .font(.body)
+            .textSelection(.enabled)
     }
 }
 
@@ -172,23 +173,39 @@ private struct ChatRichBlock: Identifiable {
     }
 }
 
+@MainActor
 private enum InlineMathDocument {
     static func containsMath(in source: String) -> Bool {
         mathRanges(in: source).isEmpty == false
     }
 
-    static func latex(from source: String) -> String {
+    static func text(from source: String, fontSize: CGFloat) -> Text {
         let ranges = mathRanges(in: source)
-        guard !ranges.isEmpty else { return textLatex(source) }
-        var result = ""
+        guard !ranges.isEmpty else { return Text(markdown(source)) }
+        var result = Text("")
         var cursor = source.startIndex
         for range in ranges {
-            result += textLatex(String(source[cursor..<range.full.lowerBound]))
-            result += String(source[range.content])
+            result = result + Text(markdown(String(source[cursor..<range.full.lowerBound])))
+            let latex = String(source[range.content])
+            if let image = mathImage(latex: latex, fontSize: fontSize) {
+                result = result + Text(image).baselineOffset(-2)
+            } else {
+                result = result + Text(latex)
+            }
             cursor = range.full.upperBound
         }
-        result += textLatex(String(source[cursor...]))
+        result = result + Text(markdown(String(source[cursor...])))
         return result
+    }
+
+    private static func markdown(_ source: String) -> AttributedString {
+        (try? AttributedString(
+            markdown: source,
+            options: .init(
+                interpretedSyntax: .full,
+                failurePolicy: .returnPartiallyParsedIfPossible
+            )
+        )) ?? AttributedString(source)
     }
 
     private struct MathRange {
@@ -227,27 +244,39 @@ private enum InlineMathDocument {
         return result
     }
 
-    private static func textLatex(_ source: String) -> String {
-        guard !source.isEmpty else { return "" }
-        var value = source
-            .replacingOccurrences(of: #"!\[([^\]]*)\]\([^)]+\)"#, with: "$1", options: .regularExpression)
-            .replacingOccurrences(of: #"\[([^\]]+)\]\(([^)]+)\)"#, with: "$1 ($2)", options: .regularExpression)
-            .replacingOccurrences(of: #"^#{1,6}\s*"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"(?m)^\s*[-*+]\s+"#, with: "• ", options: .regularExpression)
-            .replacingOccurrences(of: #"(?m)^\s*\d+\.\s+"#, with: "• ", options: .regularExpression)
-            .replacingOccurrences(of: "**", with: "")
-            .replacingOccurrences(of: "__", with: "")
-            .replacingOccurrences(of: "`", with: "")
-            .replacingOccurrences(of: "\n", with: " ")
-        value = value
-            .replacingOccurrences(of: "\\", with: "\\backslash ")
-            .replacingOccurrences(of: "{", with: "\\{")
-            .replacingOccurrences(of: "}", with: "\\}")
-            .replacingOccurrences(of: "%", with: "\\%")
-            .replacingOccurrences(of: "#", with: "\\#")
-            .replacingOccurrences(of: "&", with: "\\&")
-            .replacingOccurrences(of: "_", with: "\\_")
-        return "\\text{\(value)}"
+    private static func mathImage(latex: String, fontSize: CGFloat) -> Image? {
+        let label = MTMathUILabel()
+        label.latex = latex
+        label.font = MTFontManager().font(
+            withName: MathFont.latinModernFont.rawValue,
+            size: fontSize
+        )
+        label.labelMode = .text
+        label.textAlignment = .left
+
+        #if os(macOS)
+        label.textColor = .labelColor
+        let size = label.fittingSize
+        guard size.width > 0, size.height > 0 else { return nil }
+        label.frame = CGRect(origin: .zero, size: size)
+        guard let representation = label.bitmapImageRepForCachingDisplay(in: label.bounds) else {
+            return nil
+        }
+        label.cacheDisplay(in: label.bounds, to: representation)
+        let image = NSImage(size: size)
+        image.addRepresentation(representation)
+        return Image(nsImage: image)
+        #else
+        label.textColor = .label
+        let size = label.intrinsicContentSize
+        guard size.width > 0, size.height > 0 else { return nil }
+        label.frame = CGRect(origin: .zero, size: size)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let image = renderer.image { context in
+            label.layer.render(in: context.cgContext)
+        }
+        return Image(uiImage: image)
+        #endif
     }
 }
 
@@ -280,7 +309,7 @@ struct MathTypesetView: NSViewRepresentable {
         view.latex = latex
         let font = MTFontManager().font(withName: MathFont.latinModernFont.rawValue, size: fontSize)
         view.font = font
-        view.textAlignment = .left
+        view.textAlignment = mode == .display ? .center : .left
         view.labelMode = mode
         view.textColor = .labelColor
         view.invalidateIntrinsicContentSize()
@@ -315,7 +344,7 @@ struct MathTypesetView: UIViewRepresentable {
         view.latex = latex
         let font = MTFontManager().font(withName: MathFont.latinModernFont.rawValue, size: fontSize)
         view.font = font
-        view.textAlignment = .left
+        view.textAlignment = mode == .display ? .center : .left
         view.labelMode = mode
         view.textColor = .label
         view.invalidateIntrinsicContentSize()

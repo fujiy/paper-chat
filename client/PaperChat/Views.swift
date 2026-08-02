@@ -82,73 +82,74 @@ struct LibrarySidebar: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        List {
-            Section {
-                SidebarButton(
-                    title: "Start",
-                    systemImage: "house",
-                    selected: model.route == .start
-                ) { model.navigate(to: .start, fromSidebar: true) }
-                SidebarButton(
-                    title: "Search",
-                    systemImage: "magnifyingglass",
-                    selected: model.route == .search
-                ) { model.navigate(to: .search, fromSidebar: true) }
-                SidebarButton(
-                    title: "All Papers",
-                    systemImage: "books.vertical",
-                    selected: model.route == .allPapers
-                ) { model.navigate(to: .allPapers, fromSidebar: true) }
-                SidebarButton(
-                    title: "Recent",
-                    systemImage: "clock",
-                    selected: model.route == .recent
-                ) { model.navigate(to: .recent, fromSidebar: true) }
-                SidebarButton(
-                    title: "Starred",
-                    systemImage: "star",
-                    selected: model.route == .starred
-                ) { model.navigate(to: .starred, fromSidebar: true) }
-                SidebarButton(
-                    title: "Chats",
-                    systemImage: "bubble.left.and.bubble.right",
-                    selected: model.route == .chats
-                ) { model.navigate(to: .chats, fromSidebar: true) }
-            }
+        VStack(spacing: 0) {
+            List {
+                Section {
+                    SidebarButton(
+                        title: "Start",
+                        systemImage: "house",
+                        selected: model.route == .start
+                    ) { model.navigate(to: .start, fromSidebar: true) }
+                    SidebarButton(
+                        title: "Search",
+                        systemImage: "magnifyingglass",
+                        selected: model.route == .search
+                    ) { model.navigate(to: .search, fromSidebar: true) }
+                    SidebarButton(
+                        title: "All Papers",
+                        systemImage: "books.vertical",
+                        selected: model.route == .allPapers
+                    ) { model.navigate(to: .allPapers, fromSidebar: true) }
+                    SidebarButton(
+                        title: "Recent",
+                        systemImage: "clock",
+                        selected: model.route == .recent
+                    ) { model.navigate(to: .recent, fromSidebar: true) }
+                    SidebarButton(
+                        title: "Starred",
+                        systemImage: "star",
+                        selected: model.route == .starred
+                    ) { model.navigate(to: .starred, fromSidebar: true) }
+                    SidebarButton(
+                        title: "Chats",
+                        systemImage: "bubble.left.and.bubble.right",
+                        selected: model.route == .chats
+                    ) { model.navigate(to: .chats, fromSidebar: true) }
+                }
 
-            if !model.recentPapers.isEmpty {
-                Section("Recent") {
-                    ForEach(model.recentPapers.prefix(8)) { paper in
-                        Button {
-                            Task { await model.open(paper: paper, fromSidebar: true) }
-                        } label: {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(paper.title)
-                                    .font(.callout.weight(.medium))
-                                    .lineLimit(2)
-                                Text(compactPaperMetadata(paper.authors, paper.year))
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
+                if !model.recentPapers.isEmpty {
+                    Section("Recent") {
+                        ForEach(model.recentPapers.prefix(8)) { paper in
+                            Button {
+                                Task { await model.open(paper: paper, fromSidebar: true) }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(paper.title)
+                                        .font(.callout.weight(.medium))
+                                        .lineLimit(2)
+                                    Text(compactPaperMetadata(paper.authors, paper.year))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+                                .contentShape(Rectangle())
                             }
-                            .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
-                            .contentShape(Rectangle())
+                            .buttonStyle(.plain)
+                            .listRowInsets(EdgeInsets(top: 2, leading: 12, bottom: 2, trailing: 10))
+                            .listRowBackground(
+                                model.route == .paper(paper.id)
+                                    ? Color.accentColor.opacity(0.14)
+                                    : Color.clear
+                            )
                         }
-                        .buttonStyle(.plain)
-                        .listRowInsets(EdgeInsets(top: 2, leading: 12, bottom: 2, trailing: 10))
-                        .listRowBackground(
-                            model.route == .paper(paper.id)
-                                ? Color.accentColor.opacity(0.14)
-                                : Color.clear
-                        )
                     }
                 }
             }
-        }
-        .listStyle(.sidebar)
-        .navigationTitle("")
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
+            .listStyle(.sidebar)
+
+            Divider()
+            HStack {
                 Menu {
                     Button("Refresh Library", systemImage: "arrow.clockwise") {
                         Task { await model.refreshLibrary() }
@@ -163,8 +164,12 @@ struct LibrarySidebar: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
+                Spacer()
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
         }
+        .navigationTitle("")
     }
 }
 
@@ -259,9 +264,14 @@ struct WorkspaceDetail: View {
                     if let itemKey = session.paper.identifiers?
                         .first(where: { $0.kind == "zotero_item" })?.value,
                        let url = URL(string: "zotero://select/library/items/\(itemKey)") {
-                        Button("Open in Zotero", systemImage: "arrow.up.forward.app") {
+                        Button {
                             openURL(url)
                         }
+                        label: {
+                            Text("Z")
+                        }
+                        .accessibilityLabel("Open in Zotero")
+                        .help("Open in Zotero")
                     }
                     Button(
                         session.isChatPresented ? "Hide Chat" : "Show Chat",
@@ -1195,7 +1205,7 @@ struct ChatComposer: View {
                             .foregroundStyle(.tertiary)
                             .font(.system(size: 16))
                             .padding(.horizontal, 6)
-                            .padding(.top, 9)
+                            .padding(.top, 5)
                     }
                     TextEditor(text: $session.draft)
                         .focused($editorFocused)
@@ -1262,13 +1272,10 @@ struct ModelMenu: View {
                 }
             }
         } label: {
-            HStack(spacing: 4) {
-                Text(model.selectedModel?.displayName ?? "Default model")
-                    .lineLimit(1)
-                Image(systemName: "chevron.down").font(.caption2)
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            Text(model.selectedModel?.displayName ?? "Default model")
+                .lineLimit(1)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -1294,12 +1301,9 @@ struct EffortMenu: View {
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
-                    Text((model.selectedEffortID ?? selectedModel.defaultReasoningEffort).capitalized)
-                    Image(systemName: "chevron.down").font(.caption2)
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                Text((model.selectedEffortID ?? selectedModel.defaultReasoningEffort).capitalized)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
@@ -1315,33 +1319,66 @@ struct MessageBubble: View {
     var body: some View {
         HStack {
             if message.role == "user" { Spacer(minLength: 32) }
-            VStack(alignment: .leading, spacing: 7) {
-                if message.content.isEmpty {
-                    ProgressView()
-                        .controlSize(.small)
-                        .padding(.vertical, 2)
-                } else {
-                    ChatRichText(source: message.content)
-                }
-                if message.role == "assistant", !citedPages.isEmpty {
-                    HStack {
-                        ForEach(citedPages, id: \.self) { page in
-                            Button("p. \(page)") {
-                                model.pageChanged(page - 1, in: session)
-                            }
-                            .buttonStyle(.bordered)
+            VStack(
+                alignment: message.role == "user" ? .trailing : .leading,
+                spacing: 5
+            ) {
+                VStack(alignment: .leading, spacing: 5) {
+                    if message.status == "failed", message.content.isEmpty {
+                        Label(
+                            "Response failed. You can try again or keep chatting.",
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    } else if message.content.isEmpty {
+                        ProgressView()
                             .controlSize(.small)
+                            .padding(.vertical, 2)
+                    } else {
+                        ChatRichText(source: message.content)
+                    }
+                    if message.status == "failed", !message.content.isEmpty {
+                        Label("Response interrupted", systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if message.role == "assistant", !citedPages.isEmpty {
+                        HStack {
+                            ForEach(citedPages, id: \.self) { page in
+                                Button("p. \(page)") {
+                                    model.pageChanged(page - 1, in: session)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
                         }
                     }
                 }
+                .padding(10)
+                .background(
+                    message.role == "user"
+                        ? Color.accentColor.opacity(0.18)
+                        : Color.secondary.opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 12)
+                )
+
+                if !message.content.isEmpty {
+                    HStack(spacing: 6) {
+                        Button("Copy", systemImage: "square.on.square") {
+                            copyMessageToPasteboard()
+                        }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Copy message")
+
+                        Text(messageTimestamp)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
+                }
             }
-            .padding(10)
-            .background(
-                message.role == "user"
-                    ? Color.accentColor.opacity(0.18)
-                    : Color.secondary.opacity(0.12),
-                in: RoundedRectangle(cornerRadius: 12)
-            )
             if message.role != "user" { Spacer(minLength: 32) }
         }
     }
@@ -1354,6 +1391,22 @@ struct MessageBubble: View {
             guard let range = Range(match.range(at: 1), in: message.content) else { return nil }
             return Int(message.content[range])
         })).sorted()
+    }
+
+    private var messageTimestamp: String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = formatter.date(from: message.createdAt)
+        return date?.formatted(.dateTime.hour().minute()) ?? ""
+    }
+
+    private func copyMessageToPasteboard() {
+        #if os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(message.content, forType: .string)
+        #else
+        UIPasteboard.general.string = message.content
+        #endif
     }
 }
 

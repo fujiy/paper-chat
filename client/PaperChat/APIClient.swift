@@ -219,12 +219,28 @@ actor APIClient {
     private func data(
         for request: URLRequest, authenticated: Bool
     ) async throws -> (Data, URLResponse) {
-        var result = try await session.data(for: request)
+        var result = try await dataWithTransientRetry(for: request)
         if authenticated, (result.1 as? HTTPURLResponse)?.statusCode == 401 {
             try await refresh()
-            result = try await session.data(for: withLatestAccessToken(request))
+            result = try await dataWithTransientRetry(for: withLatestAccessToken(request))
         }
         return result
+    }
+
+    private func dataWithTransientRetry(for request: URLRequest) async throws -> (Data, URLResponse) {
+        let canRetry = request.httpMethod == "GET" || request.httpMethod == "HEAD"
+        var attempt = 0
+        while true {
+            let result = try await session.data(for: request)
+            guard canRetry,
+                  let response = result.1 as? HTTPURLResponse,
+                  Self.transientStatusCodes.contains(response.statusCode),
+                  attempt < 2 else {
+                return result
+            }
+            attempt += 1
+            try await Task.sleep(for: .milliseconds(250 * attempt))
+        }
     }
 
     private func refresh() async throws {
@@ -252,7 +268,7 @@ actor APIClient {
             guard (200..<300).contains(http.statusCode) else {
                 throw APIError.server(
                     http.statusCode,
-                    String(data: data, encoding: .utf8) ?? "Request failed"
+                    Self.errorDetail(data: data, response: http)
                 )
             }
             let refreshed = try JSONDecoder.paperChat.decode(AuthTokens.self, from: data)
@@ -264,8 +280,10 @@ actor APIClient {
         do {
             tokens = try await task.value
         } catch {
-            KeychainStore.delete(account: "tokens")
-            tokens = nil
+            if let apiError = error as? APIError, apiError.isAuthenticationFailure {
+                KeychainStore.delete(account: "tokens")
+                tokens = nil
+            }
             throw error
         }
     }
@@ -298,9 +316,29 @@ actor APIClient {
         guard (200..<300).contains(response.statusCode) else {
             throw APIError.server(
                 response.statusCode,
-                String(data: data, encoding: .utf8) ?? "Request failed"
+                Self.errorDetail(data: data, response: response)
             )
         }
+    }
+
+    private static let transientStatusCodes: Set<Int> = [502, 503, 504]
+
+    private static func errorDetail(data: Data, response: HTTPURLResponse) -> String {
+        if let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let detail = payload["detail"] as? String,
+           !detail.isEmpty {
+            return detail
+        }
+        let body = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let contentType = response.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
+        if transientStatusCodes.contains(response.statusCode)
+            || contentType.contains("text/html")
+            || body.lowercased().hasPrefix("<!doctype html")
+            || body.lowercased().hasPrefix("<html") {
+            return "The server is temporarily unavailable. Please try again."
+        }
+        return body.isEmpty ? "Request failed." : String(body.prefix(500))
     }
 
     private static func describe(_ error: DecodingError) -> String {
@@ -343,6 +381,26 @@ enum APIError: LocalizedError {
         case let .decoding(detail): "The server response could not be decoded. \(detail)"
         }
     }
+
+    var isAuthenticationFailure: Bool {
+        switch self {
+        case .unauthorized, .server(400, _), .server(401, _):
+            true
+        default:
+            false
+        }
+    }
+
+    var isTransient: Bool {
+        switch self {
+        case let .http(status), let .server(status, _):
+            Self.transientStatusCodes.contains(status)
+        default:
+            false
+        }
+    }
+
+    private static let transientStatusCodes: Set<Int> = [502, 503, 504]
 }
 
 struct AnyEncodable: Encodable {

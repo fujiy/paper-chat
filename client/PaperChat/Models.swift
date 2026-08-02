@@ -109,7 +109,7 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     var content: String
     let pageRefs: [PageReference]
     let selectedText: String?
-    let status: String
+    var status: String
     let createdAt: String
 
     private enum CodingKeys: String, CodingKey {
