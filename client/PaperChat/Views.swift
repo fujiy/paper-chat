@@ -1468,12 +1468,12 @@ struct MessageBubble: View {
                         }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.platformSecondaryLabel)
                         .help("Copy message")
 
                         Text(messageTimestamp)
                             .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Color.platformTertiaryLabel)
                     }
                 }
             }
@@ -1485,12 +1485,13 @@ struct MessageBubble: View {
     private var messageContent: some View {
         VStack(alignment: .leading, spacing: 5) {
             if message.status == "failed", message.content.isEmpty {
-                Label(
-                    "Response failed. You can try again or keep chatting.",
-                    systemImage: "exclamationmark.triangle"
-                )
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("Response failed. You can try again or keep chatting.")
+                        .foregroundStyle(Color.platformPrimaryLabel)
+                }
                 .font(.callout)
-                .foregroundStyle(.secondary)
             } else if message.content.isEmpty {
                 ProgressView()
                     .controlSize(.small)
@@ -1504,9 +1505,13 @@ struct MessageBubble: View {
                 }
             }
             if message.status == "failed", !message.content.isEmpty {
-                Label("Response interrupted", systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("Response interrupted")
+                        .foregroundStyle(Color.platformPrimaryLabel)
+                }
+                .font(.caption)
             }
         }
     }
@@ -1546,17 +1551,17 @@ private struct UserMessageContext: View {
             if let pageLabel {
                 Label(pageLabel, systemImage: "doc.text")
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.platformSecondaryLabel)
             }
             if let selectedText = message.selectedText?.trimmingCharacters(
                 in: .whitespacesAndNewlines
             ), !selectedText.isEmpty {
                 Label("PDF selection", systemImage: "text.quote")
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.platformSecondaryLabel)
                 Text(selectedText)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.platformSecondaryLabel)
                     .textSelection(.enabled)
             }
         }
@@ -1595,6 +1600,30 @@ private func compactPaperMetadata(_ authors: [Creator], _ year: String?) -> Stri
 }
 
 extension Color {
+    static var platformPrimaryLabel: Color {
+        #if os(macOS)
+        Color(nsColor: .labelColor)
+        #else
+        Color(uiColor: .label)
+        #endif
+    }
+
+    static var platformSecondaryLabel: Color {
+        #if os(macOS)
+        Color(nsColor: .secondaryLabelColor)
+        #else
+        Color(uiColor: .secondaryLabel)
+        #endif
+    }
+
+    static var platformTertiaryLabel: Color {
+        #if os(macOS)
+        Color(nsColor: .tertiaryLabelColor)
+        #else
+        Color(uiColor: .tertiaryLabel)
+        #endif
+    }
+
     static var platformBackground: Color {
         #if os(macOS)
         Color(nsColor: .windowBackgroundColor)
