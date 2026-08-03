@@ -77,6 +77,13 @@ actor APIClient {
         try await request("api/papers/\(id)")
     }
 
+    func textAvailability(paperID: String) async throws -> Bool {
+        let response: TextAvailabilityResponse = try await request(
+            "api/papers/\(paperID)/text-availability"
+        )
+        return response.available
+    }
+
     func setStar(paperID: String, starred: Bool) async throws -> Bool {
         let response: StarResponse = try await request(
             "api/papers/\(paperID)/star",

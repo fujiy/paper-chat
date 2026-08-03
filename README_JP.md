@@ -80,6 +80,8 @@ docker exec -e CODEX_HOME=/data/codex/home \
 
 認証後、`LLM_BACKEND=codex`でPaperChat APIを再作成します。通常のE2E検証だけなら`LLM_BACKEND=fake`を使用できます。
 
+`scripts/prepare-secrets.sh`は、内部REST用の`zotero_service_token`とは別に、CodexからZotero MCPへ接続するための`zotero_mcp_token`を生成します。専用トークンはDocker Secretとして両コンテナへ渡され、Codex子プロセスのBearer認証にだけ使用されます。MCP URLの既定値はCompose内部の`http://zotero-library-app:8000/mcp`です。
+
 実論文の本文を送らずに、Codex接続・ストリーミング・thread再開だけを確認できます。
 
 ```sh

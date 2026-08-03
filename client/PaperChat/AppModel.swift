@@ -316,6 +316,7 @@ final class AppModel: ObservableObject {
     @discardableResult
     private func openPaper(_ paper: Paper, fromSidebar: Bool) async throws -> PaperSession {
         if let existing = openSessions.first(where: { $0.id == paper.id }) {
+            refreshAgentTextAvailability(in: existing)
             if !fromSidebar {
                 promoteInRecent(existing.paper)
             }
@@ -340,8 +341,18 @@ final class AppModel: ObservableObject {
             promoteInRecent(detail)
         }
         openSessions.append(session)
+        refreshAgentTextAvailability(in: session)
         navigate(to: .paper(session.id), fromSidebar: fromSidebar)
         return session
+    }
+
+    private func refreshAgentTextAvailability(in session: PaperSession) {
+        session.agentTextAvailability = .checking
+        Task { [weak self, weak session] in
+            guard let self, let session else { return }
+            let available = (try? await client.textAvailability(paperID: session.id)) ?? false
+            session.agentTextAvailability = available ? .available : .unavailable
+        }
     }
 
     private func promoteInRecent(_ paper: Paper) {

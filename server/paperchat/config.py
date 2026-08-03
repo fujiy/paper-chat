@@ -23,8 +23,11 @@ class Settings(BaseSettings):
     zotero_library_url: str = Field(
         default="http://zotero-library-app:8000", alias="ZOTERO_LIBRARY_URL"
     )
+    zotero_mcp_url: str | None = Field(default=None, alias="ZOTERO_MCP_URL")
     zotero_service_token: SecretStr | None = Field(default=None, alias="ZOTERO_SERVICE_TOKEN")
     zotero_service_token_file: Path | None = Field(default=None, alias="ZOTERO_SERVICE_TOKEN_FILE")
+    zotero_mcp_token: SecretStr | None = Field(default=None, alias="ZOTERO_MCP_TOKEN")
+    zotero_mcp_token_file: Path | None = Field(default=None, alias="ZOTERO_MCP_TOKEN_FILE")
     llm_backend: Literal["fake", "codex"] = Field(default="fake", alias="LLM_BACKEND")
     codex_command: str = Field(default="codex", alias="CODEX_COMMAND")
     codex_home: Path = Field(default=Path("/data/codex/home"), alias="CODEX_HOME_DIR")
@@ -50,6 +53,14 @@ class Settings(BaseSettings):
     @property
     def resolved_zotero_service_token(self) -> str | None:
         return self.secret(self.zotero_service_token, self.zotero_service_token_file)
+
+    @property
+    def resolved_zotero_mcp_token(self) -> str | None:
+        return self.secret(self.zotero_mcp_token, self.zotero_mcp_token_file)
+
+    @property
+    def resolved_zotero_mcp_url(self) -> str:
+        return self.zotero_mcp_url or f"{self.zotero_library_url.rstrip('/')}/mcp"
 
     def ensure_dirs(self) -> None:
         self.resolved_database_path.parent.mkdir(parents=True, exist_ok=True)

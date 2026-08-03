@@ -36,6 +36,9 @@ def client_for(tmp_path, monkeypatch) -> TestClient:
             "text": f"[page {start}]\nTest evidence.",
         }
 
+    async def text_availability(self, attachment_key):
+        return True
+
     async def papers(self, limit=500, offset=0):
         return {
             "papers": [
@@ -83,6 +86,9 @@ def client_for(tmp_path, monkeypatch) -> TestClient:
 
     monkeypatch.setattr("paperchat.library.ZoteroLibrary.metadata", metadata)
     monkeypatch.setattr("paperchat.library.ZoteroLibrary.pages", pages)
+    monkeypatch.setattr(
+        "paperchat.library.ZoteroLibrary.text_availability", text_availability
+    )
     monkeypatch.setattr("paperchat.library.ZoteroLibrary.papers", papers)
     monkeypatch.setattr("paperchat.library.ZoteroLibrary.search", search)
     return TestClient(app)
@@ -124,6 +130,9 @@ def test_paper_thread_reading_state_and_streaming_chat(tmp_path, monkeypatch):
         )
         assert resolved.status_code == 200
         paper = resolved.json()
+        availability = client.get(
+            f"/api/papers/{paper['id']}/text-availability", headers=headers
+        )
 
         thread_response = client.post(
             f"/api/papers/{paper['id']}/threads", json={"title": "Main"}, headers=headers
@@ -155,6 +164,7 @@ def test_paper_thread_reading_state_and_streaming_chat(tmp_path, monkeypatch):
     assert models.status_code == 200
     assert models.json()["models"][0]["id"] == "fake"
     assert models.json()["models"][0]["default_reasoning_effort"] == "medium"
+    assert availability.json() == {"available": True}
     assert chat.status_code == 200
     events = [
         line.removeprefix("event: ")
@@ -168,6 +178,25 @@ def test_paper_thread_reading_state_and_streaming_chat(tmp_path, monkeypatch):
     assert messages[1]["status"] == "completed"
     assert "[p. 1]" in messages[1]["content"]
     assert paper_after["reading_state"]["page_index"] == 4
+
+
+def test_text_availability_is_false_without_indexed_text(tmp_path, monkeypatch):
+    with client_for(tmp_path, monkeypatch) as client:
+        headers = {"Authorization": f"Bearer {register(client)['access_token']}"}
+        paper = client.post(
+            "/api/papers/resolve", json={"attachment_key": "ATT1"}, headers=headers
+        ).json()
+
+        async def unavailable(self, attachment_key):
+            return False
+
+        monkeypatch.setattr("paperchat.library.ZoteroLibrary.text_availability", unavailable)
+        response = client.get(
+            f"/api/papers/{paper['id']}/text-availability", headers=headers
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"available": False}
 
 
 def test_library_starred_and_chat_overview(tmp_path, monkeypatch):

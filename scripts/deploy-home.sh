@@ -35,6 +35,10 @@ docker_target run --rm -i --mount "type=volume,src=$secrets_volume,dst=/secrets"
   alpine:3.22 sh -c \
   'umask 077; cat > /secrets/zotero_service_token; chown 10001:10001 /secrets/zotero_service_token' \
   < .secrets/zotero_service_token
+docker_target run --rm -i --mount "type=volume,src=$secrets_volume,dst=/secrets" \
+  alpine:3.22 sh -c \
+  'umask 077; cat > /secrets/zotero_mcp_token; chown 10001:10001 /secrets/zotero_mcp_token' \
+  < .secrets/zotero_mcp_token
 
 docker_target compose \
   -f "$old_project_dir/compose.yaml" -f "$old_project_dir/compose.prod.yaml" \

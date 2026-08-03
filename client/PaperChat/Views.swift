@@ -1145,12 +1145,32 @@ struct ChatPane: View {
     @ObservedObject var session: PaperSession
 
     var body: some View {
-        Group {
-            switch session.chatRoute {
-            case .list:
-                ChatListView(session: session)
-            case .conversation, .compose:
-                ConversationView(session: session)
+        VStack(spacing: 0) {
+            if session.agentTextAvailability == .unavailable {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(
+                        "No OCR or indexed text is available for this paper. "
+                            + "The agent cannot read it unless you include a PDF selection."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(Color.orange.opacity(0.09))
+                Divider()
+            }
+
+            Group {
+                switch session.chatRoute {
+                case .list:
+                    ChatListView(session: session)
+                case .conversation, .compose:
+                    ConversationView(session: session)
+                }
             }
         }
         .background(Color.platformBackground)
@@ -1418,71 +1438,28 @@ struct MessageBubble: View {
     @ObservedObject var session: PaperSession
     @EnvironmentObject private var model: AppModel
 
+    private var isUser: Bool { message.role == "user" }
+
     var body: some View {
-        HStack {
-            if message.role == "user" { Spacer(minLength: 32) }
+        HStack(alignment: .top) {
+            if isUser { Spacer(minLength: 32) }
             VStack(
-                alignment: message.role == "user" ? .trailing : .leading,
-                spacing: 5
+                alignment: isUser ? .trailing : .leading,
+                spacing: 6
             ) {
-                VStack(alignment: .leading, spacing: 5) {
-                    if message.role == "user",
-                       let selectedText = message.selectedText?.trimmingCharacters(
-                        in: .whitespacesAndNewlines
-                       ),
-                       !selectedText.isEmpty {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Label("PDF selection", systemImage: "text.quote")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            Text(selectedText)
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
-                        .background(
-                            Color.secondary.opacity(0.1),
-                            in: RoundedRectangle(cornerRadius: 8)
-                        )
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.secondary.opacity(0.22), lineWidth: 0.5)
-                        }
-                    }
-                    if message.status == "failed", message.content.isEmpty {
-                        Label(
-                            "Response failed. You can try again or keep chatting.",
-                            systemImage: "exclamationmark.triangle"
-                        )
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                    } else if message.content.isEmpty {
-                        ProgressView()
-                            .controlSize(.small)
-                            .padding(.vertical, 2)
-                    } else {
-                        ChatRichText(
-                            source: message.content,
-                            isStreaming: message.status == "streaming"
-                        ) { page in
-                            model.pageChanged(page - 1, in: session)
-                        }
-                    }
-                    if message.status == "failed", !message.content.isEmpty {
-                        Label("Response interrupted", systemImage: "exclamationmark.triangle")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                if isUser {
+                    UserMessageContext(message: message)
                 }
-                .padding(10)
-                .background(
-                    message.role == "user"
-                        ? Color.accentColor.opacity(0.18)
-                        : Color.secondary.opacity(0.12),
-                    in: RoundedRectangle(cornerRadius: 12)
-                )
+
+                messageContent
+                    .frame(maxWidth: isUser ? nil : .infinity, alignment: .leading)
+                    .padding(isUser ? 10 : 0)
+                    .background {
+                        if isUser {
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color.secondary.opacity(0.10))
+                        }
+                    }
 
                 if !message.content.isEmpty {
                     HStack(spacing: 6) {
@@ -1500,7 +1477,37 @@ struct MessageBubble: View {
                     }
                 }
             }
-            if message.role != "user" { Spacer(minLength: 32) }
+            .frame(maxWidth: isUser ? nil : .infinity, alignment: isUser ? .trailing : .leading)
+        }
+    }
+
+    @ViewBuilder
+    private var messageContent: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if message.status == "failed", message.content.isEmpty {
+                Label(
+                    "Response failed. You can try again or keep chatting.",
+                    systemImage: "exclamationmark.triangle"
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            } else if message.content.isEmpty {
+                ProgressView()
+                    .controlSize(.small)
+                    .padding(.vertical, 2)
+            } else {
+                ChatRichText(
+                    source: message.content,
+                    isStreaming: message.status == "streaming"
+                ) { page in
+                    model.pageChanged(page - 1, in: session)
+                }
+            }
+            if message.status == "failed", !message.content.isEmpty {
+                Label("Response interrupted", systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -1518,6 +1525,42 @@ struct MessageBubble: View {
         #else
         UIPasteboard.general.string = message.content
         #endif
+    }
+}
+
+private struct UserMessageContext: View {
+    let message: ChatMessage
+
+    private var pageNumbers: [Int] {
+        Array(Set(message.pageRefs.map { $0.pageIndex + 1 })).sorted()
+    }
+
+    private var pageLabel: String? {
+        guard !pageNumbers.isEmpty else { return nil }
+        let numbers = pageNumbers.map(String.init).joined(separator: ", ")
+        return pageNumbers.count == 1 ? "Page \(numbers)" : "Pages \(numbers)"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if let pageLabel {
+                Label(pageLabel, systemImage: "doc.text")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+            if let selectedText = message.selectedText?.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ), !selectedText.isEmpty {
+                Label("PDF selection", systemImage: "text.quote")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Text(selectedText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+        .frame(maxWidth: 360, alignment: .leading)
     }
 }
 

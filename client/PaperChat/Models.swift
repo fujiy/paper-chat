@@ -243,6 +243,16 @@ struct StarResponse: Codable, Sendable {
     let starred: Bool
 }
 
+struct TextAvailabilityResponse: Codable, Sendable {
+    let available: Bool
+}
+
+enum AgentTextAvailability: Equatable, Sendable {
+    case checking
+    case available
+    case unavailable
+}
+
 struct ChatOverview: Codable, Identifiable, Hashable, Sendable {
     let id: String
     let paperID: String
@@ -328,6 +338,7 @@ final class PaperSession: ObservableObject, Identifiable {
     @Published var selectedThread: ChatThread?
     @Published var messages: [ChatMessage] = []
     @Published var streamingMessage: StreamingChatMessage?
+    @Published var agentTextAvailability: AgentTextAvailability = .checking
     @Published var isChatPresented = false
     @Published var chatRoute: ChatRoute = .list
     @Published var chatWidth: CGFloat = 390

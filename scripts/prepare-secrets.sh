@@ -4,7 +4,7 @@ set -eu
 mkdir -p .secrets
 chmod 700 .secrets
 
-for name in paperchat_bootstrap_token zotero_service_token; do
+for name in paperchat_bootstrap_token zotero_service_token zotero_mcp_token; do
   path=".secrets/$name"
   if [ ! -s "$path" ]; then
     umask 077
@@ -13,4 +13,3 @@ for name in paperchat_bootstrap_token zotero_service_token; do
 done
 
 echo "Secrets are ready in .secrets/ (git-ignored)."
-

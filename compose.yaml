@@ -14,6 +14,7 @@ services:
       BOOTSTRAP_TOKEN_FILE: /run/secrets/paperchat_bootstrap_token
       ZOTERO_LIBRARY_URL: http://zotero-library-app:8000
       ZOTERO_SERVICE_TOKEN_FILE: /run/secrets/zotero_service_token
+      ZOTERO_MCP_TOKEN_FILE: /run/secrets/zotero_mcp_token
       LLM_BACKEND: ${LLM_BACKEND:-codex}
       CODEX_HOME_DIR: /data/codex/home
       CODEX_HOME: /data/codex/home
@@ -53,6 +54,7 @@ services:
       HTTP_HOST: 0.0.0.0
       HTTP_PORT: 8000
       SERVICE_TOKEN_FILE: /run/secrets/zotero_service_token
+      MCP_SERVICE_TOKEN_FILE: /run/secrets/zotero_mcp_token
     volumes:
       - zotero_data:/data
       - paperchat_secrets:/run/secrets:ro

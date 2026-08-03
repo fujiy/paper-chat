@@ -108,9 +108,9 @@ PaperChatは`zotero-mcp-library`のSQLiteデータベースや保存ディレク
 認証情報は用途ごとに分離する．
 
 1. PaperChatクライアントは，PaperChatのaccess tokenおよびrefresh tokenを用いる．
-2. PaperChatサーバーは，専用のservice tokenを用いて`zotero-mcp-library`へ接続する．
+2. PaperChatサーバーは，内部HTTP API専用のservice tokenを用いて`zotero-mcp-library`へ接続する．
 3. `zotero-mcp-library`の同期workerだけがZotero API tokenを保持する．
-4. CodexはZotero API tokenおよび`zotero-mcp-library`のOAuth資格情報を保持せず，PaperChat文献ゲートウェイを利用する．
+4. CodexはZotero API tokenおよびOAuth資格情報を保持せず，Docker内部専用のMCP service tokenで`zotero-mcp-library`へ接続する．このtokenはPaperChat内部API用service tokenとも分離する．
 
 ## 5. システム構成
 
@@ -131,9 +131,11 @@ PaperChatは`zotero-mcp-library`のSQLiteデータベースや保存ディレク
 │ - PaperChat Library Gateway            │
 │ - Imported Document Store              │
 └───────────┬────────────────┬───────────┘
-            │                │ service token
+            │                │ internal API service token
             ▼                ▼
     Codex SDK/app-server   zotero-mcp-library
+            └───────────────▲
+              MCP + dedicated service token
                               │ Zotero API token
                               ▼
                          Zotero Web API
@@ -222,12 +224,12 @@ PaperChatサーバーは`zotero-mcp-library`がキャッシュしたPDFを内部
 
 ### 7.4 別の論文を参照する
 
-現在の論文以外の情報が必要な場合，CodexはPaperChat文献ゲートウェイの読み取り専用ツールを利用する．
+現在の論文以外の情報が必要な場合，Codexは`zotero-mcp-library`の読み取り専用MCPツールを直接利用する．登録済みツールは原則すべて利用可能とし，質問に必要な範囲をagentが判断する．
 
-- `search_documents`により，Zotero文献とPaperChat取り込み文書を横断検索する．
-- `fetch_pages`により，必要な論文の限定されたページ範囲を取得する．
-- `render_page`により，図表または数式を含むページを画像として取得する．
-- `get_document_metadata`により，書誌情報と外部識別子を取得する．
+- `search_papers`により，Zoteroライブラリ全体から関連文献を検索する．
+- `search_evidence`により，特定文献内の根拠箇所を検索する．
+- `fetch`または`fetch_pages`により，必要な文献の限定されたページ範囲を取得する．
+- citekey/item key/attachment keyによる書誌情報取得およびページ一覧ツールも利用できる．
 
 ### 7.5 以前の会話を再開する
 
@@ -397,7 +399,7 @@ PDF質問用途では，Codexの権限を最小化する．
 
 CodexにはPDF保存ディレクトリ全体をマウントしない．
 通常は抽出本文をテキストとして渡し，図表または数式を確認する場合だけ，サーバーが生成したページ画像を渡す．
-別の論文を参照する場合は，PaperChat文献ゲートウェイの読み取り専用ツールを利用する．
+別の論文を参照する場合は，`zotero-mcp-library`の読み取り専用MCPツールを利用する．
 
 ## 10. データモデル
 
@@ -562,7 +564,7 @@ Zotero PDF，その抽出本文，および検索索引は`zotero-mcp-library`�
 5. 過去会話の要約．
 6. ページ画像．
 
-現在の論文以外の文献が必要な場合は，文献ゲートウェイによる検索結果を追加する．
+現在の論文以外の文献が必要な場合は，Codexが`zotero-mcp-library`のMCPツールで検索し，必要なページを取得する．
 
 ### 11.3 数式・図表
 
@@ -744,14 +746,13 @@ macOSおよびiPadOSクライアントのテストはLinuxコンテナの対象�
 
 ## 17. 未決事項
 
-1. PaperChatと`zotero-mcp-library`の内部通信を専用HTTP APIとMCPのどちらに統一するか．
-2. `zotero-mcp-library`に追加するPDF Range配信およびページ画像生成のAPI形式．
-3. PaperChat固有認証の初回端末登録方法．
-4. iPadからZoteroアプリの特定PDFおよび特定ページを開く方法．
-5. Web PDFとZotero attachmentの重複候補を自動統合するか，ユーザー確認を必須とするか．
-6. PDF注釈をいつ，どの互換レベルで追加するか．
-7. Codex枠の実際の消費量，応答速度，および論文質問の品質が日常利用に適するか．
-8. Python版Codex SDKのベータ期間中に，どのバージョン更新方針を採用するか．
+1. `zotero-mcp-library`に追加するPDF Range配信およびページ画像生成のAPI形式．
+2. PaperChat固有認証の初回端末登録方法．
+3. iPadからZoteroアプリの特定PDFおよび特定ページを開く方法．
+4. Web PDFとZotero attachmentの重複候補を自動統合するか，ユーザー確認を必須とするか．
+5. PDF注釈をいつ，どの互換レベルで追加するか．
+6. Codex枠の実際の消費量，応答速度，および論文質問の品質が日常利用に適するか．
+7. Python版Codex SDKのベータ期間中に，どのバージョン更新方針を採用するか．
 
 ## 18. 初期判断
 
@@ -770,7 +771,7 @@ MVPでは次を採用する．
 - PDF保存: Zotero PDFはサーバーおよび端末の削除可能なキャッシュとし，取り込みPDFはPaperChatサーバーに原本を保存する．
 - 注釈: Zoteroへ委任．
 - チャット履歴: PaperChat DBへ全文を保存して基準データとし，Codex threadは再開用の外部状態として扱う．
-- Codex文献アクセス: PaperChat文献ゲートウェイの読み取り専用ツールを利用する．
+- Codex文献アクセス: Docker内部の専用MCP service tokenを用い，`zotero-mcp-library`の読み取り専用ツールを直接利用する．
 - サーバー起動: Docker Composeを使用する．
 - テスト: サーバー試験はローカルDockerで実行し，本番デプロイ定義は分離する．
 - Web連携: Safari Share Extensionを後付けする．

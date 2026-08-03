@@ -312,6 +312,29 @@ def get_paper(paper_id: str, session: Session, settings: SettingsDependency):
         return paper_detail(conn, paper_id, str(session["device_id"]))
 
 
+@app.get("/api/papers/{paper_id}/text-availability")
+async def paper_text_availability(
+    paper_id: str,
+    _: Session,
+    settings: SettingsDependency,
+):
+    with connect(settings.resolved_database_path) as conn:
+        identifier = conn.execute(
+            """
+            SELECT value FROM paper_identifiers
+            WHERE paper_id = ? AND kind = 'zotero' LIMIT 1
+            """,
+            (paper_id,),
+        ).fetchone()
+    if not identifier:
+        return {"available": False}
+    try:
+        available = await ZoteroLibrary(settings).text_availability(identifier["value"])
+        return {"available": available}
+    except Exception:
+        return {"available": False}
+
+
 @app.patch("/api/papers/{paper_id}/reading-state")
 def save_reading_state(
     paper_id: str,
@@ -473,6 +496,7 @@ async def send_message(
         f'<paper_context pages="{max(1, page_number - 2)}-{page_number + 2}">\n'
         f"{context}\n</paper_context>\n"
         f"<selected_text>{payload.selected_text or ''}</selected_text>\n"
+        f"Current Zotero attachment key: {identifier['value'] if identifier else 'unknown'}\n"
         f"Current PDF page: {page_number}\nQuestion: {payload.content}"
     )
 
