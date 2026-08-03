@@ -58,6 +58,7 @@ class CodexBackend:
     """Minimal stdio client for the versioned Codex app-server JSON-RPC protocol."""
 
     MCP_TOKEN_ENV_VAR = "PAPERCHAT_ZOTERO_MCP_TOKEN"
+    APP_SERVER_STREAM_LIMIT = 8 * 1024 * 1024
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -77,6 +78,23 @@ class CodexBackend:
             f"url={url},bearer_token_env_var={token_env_var},"
             'required=false,default_tools_approval_mode="auto"}}'
         )
+
+    @staticmethod
+    def initialize_params() -> dict:
+        return {
+            "clientInfo": {"name": "paperchat", "version": "0.1.0"},
+            "capabilities": {"experimentalApi": True},
+        }
+
+    def thread_resume_params(self, thread_id: str) -> dict:
+        return {
+            "threadId": thread_id,
+            "cwd": str(self.settings.codex_workspace),
+            "approvalPolicy": "never",
+            "sandbox": "read-only",
+            "developerInstructions": self.developer_instructions(),
+            "excludeTurns": True,
+        }
 
     @staticmethod
     def developer_instructions() -> str:
@@ -111,6 +129,7 @@ class CodexBackend:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            limit=self.APP_SERVER_STREAM_LIMIT,
         )
         assert process.stdin and process.stdout
         request_id = 0
@@ -139,21 +158,12 @@ class CodexBackend:
             raise RuntimeError("Codex app-server exited before replying")
 
         try:
-            init_id = await send(
-                "initialize",
-                {"clientInfo": {"name": "paperchat", "version": "0.1.0"}, "capabilities": {}},
-            )
+            init_id = await send("initialize", self.initialize_params())
             await response(init_id)
             if backend_thread_id:
                 thread_request = await send(
                     "thread/resume",
-                    {
-                        "threadId": backend_thread_id,
-                        "cwd": str(self.settings.codex_workspace),
-                        "approvalPolicy": "never",
-                        "sandbox": "read-only",
-                        "developerInstructions": self.developer_instructions(),
-                    },
+                    self.thread_resume_params(backend_thread_id),
                 )
             else:
                 params = {
@@ -211,6 +221,7 @@ class CodexBackend:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            limit=self.APP_SERVER_STREAM_LIMIT,
         )
         assert process.stdin and process.stdout
 
@@ -241,7 +252,7 @@ class CodexBackend:
             await request(
                 1,
                 "initialize",
-                {"clientInfo": {"name": "paperchat", "version": "0.1.0"}, "capabilities": {}},
+                self.initialize_params(),
             )
             result = await request(2, "model/list", {"includeHidden": False, "limit": 100})
             return [

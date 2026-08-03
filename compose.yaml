@@ -92,6 +92,8 @@ services:
     security_opt: [no-new-privileges:true]
     pids_limit: 128
     mem_limit: 512m
+    cpus: 0.5
+    cpuset: "0"
     tmpfs: [/tmp]
     environment:
       DATA_DIR: /data
@@ -101,10 +103,13 @@ services:
       SEARCH_INDEX_DIR: /data/search-index/pages
       SYNC_POLL_SECONDS: ${SYNC_POLL_SECONDS:-60}
       PDF_EXTRACTION_ENABLED: ${PDF_EXTRACTION_ENABLED:-1}
-      PDF_EXTRACTION_BATCH_SIZE: ${PDF_EXTRACTION_BATCH_SIZE:-5}
+      PDF_EXTRACTION_BATCH_SIZE: ${PDF_EXTRACTION_BATCH_SIZE:-1}
       PDF_OCR_MODE: ${PDF_OCR_MODE:-fallback}
       PDF_OCR_LANGUAGES: ${PDF_OCR_LANGUAGES:-eng+jpn}
       PDF_OCR_DPI: ${PDF_OCR_DPI:-200}
+      OMP_THREAD_LIMIT: "1"
+      OMP_NUM_THREADS: "1"
+      OMP_DYNAMIC: "FALSE"
     volumes:
       - zotero_data:/data
 
