@@ -9,6 +9,9 @@ struct PDFKitView: NSViewRepresentable {
     @Binding var scrollOffset: Double
     @Binding var selectedText: String?
     let highlightTarget: PDFHighlightTarget?
+    let isImmersive: Bool
+    let horizontalScrollAllowance: CGFloat
+    let onTap: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -31,6 +34,9 @@ struct PDFKitView: UIViewRepresentable {
     @Binding var scrollOffset: Double
     @Binding var selectedText: String?
     let highlightTarget: PDFHighlightTarget?
+    let isImmersive: Bool
+    let horizontalScrollAllowance: CGFloat
+    let onTap: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -54,10 +60,13 @@ extension PDFKitView {
         view.displaysPageBreaks = true
         view.autoScales = false
         coordinator.observe(view)
+        coordinator.lastImmersive = isImmersive
         loadDocument(in: view, coordinator: coordinator)
     }
 
     func update(_ view: PDFView, coordinator: Coordinator) {
+        let immersiveChanged = coordinator.lastImmersive != isImmersive
+        coordinator.lastImmersive = isImmersive
         if view.document?.documentURL != url {
             loadDocument(in: view, coordinator: coordinator)
             return
@@ -78,6 +87,10 @@ extension PDFKitView {
             coordinator.isRestoring = false
         }
         coordinator.applyHighlight(highlightTarget)
+        coordinator.updateHorizontalScrollAllowance(horizontalScrollAllowance)
+        if immersiveChanged {
+            coordinator.restoreViewportAfterLayout(scrollOffset)
+        }
     }
 
     private func loadDocument(in view: PDFView, coordinator: Coordinator) {
@@ -133,6 +146,9 @@ extension PDFKitView {
         var lastPageIndex = -1
         var lastScale: Double = -1
         var lastHighlightToken: UUID?
+        var lastImmersive: Bool?
+        var lastHorizontalScrollAllowance: CGFloat = -1
+        var viewportOffsetBeforeToggle: CGPoint?
         nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
         #if !os(macOS)
         private var scrollObservation: NSKeyValueObservation?
@@ -144,6 +160,16 @@ extension PDFKitView {
 
         func observe(_ view: PDFView) {
             self.view = view
+            #if os(macOS)
+            let tap = NSClickGestureRecognizer(target: self, action: #selector(handleTap))
+            tap.numberOfClicksRequired = 1
+            #else
+            let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
+            tap.numberOfTapsRequired = 1
+            tap.cancelsTouchesInView = false
+            #endif
+            tap.delegate = self
+            view.addGestureRecognizer(tap)
             observers.append(NotificationCenter.default.addObserver(
                 forName: .PDFViewPageChanged, object: view, queue: .main
             ) { [weak self] _ in
@@ -160,6 +186,53 @@ extension PDFKitView {
                 Task { @MainActor in self?.syncSelection() }
             })
             observeScrolling()
+        }
+
+        func updateHorizontalScrollAllowance(_ allowance: CGFloat) {
+            #if os(macOS)
+            guard let scrollView = view?.documentView?.enclosingScrollView else { return }
+            guard abs(lastHorizontalScrollAllowance - allowance) > 0.5 else { return }
+            lastHorizontalScrollAllowance = allowance
+            scrollView.hasHorizontalScroller = true
+            scrollView.horizontalScrollElasticity = .automatic
+            var insets = scrollView.contentInsets
+            insets.right = allowance
+            scrollView.contentInsets = insets
+            #else
+            guard let scrollView = view?.descendantScrollView else { return }
+            guard abs(lastHorizontalScrollAllowance - allowance) > 0.5 else { return }
+            lastHorizontalScrollAllowance = allowance
+            scrollView.alwaysBounceHorizontal = true
+            var contentInset = scrollView.contentInset
+            contentInset.right = allowance
+            scrollView.contentInset = contentInset
+            var indicatorInset = scrollView.horizontalScrollIndicatorInsets
+            indicatorInset.right = allowance
+            scrollView.horizontalScrollIndicatorInsets = indicatorInset
+            #endif
+        }
+
+        @objc private func handleTap() {
+            viewportOffsetBeforeToggle = currentViewportOffset()
+            parent.onTap()
+        }
+
+        func restoreViewportAfterLayout(_ fallbackVerticalOffset: Double) {
+            guard let view else { return }
+            let offset = viewportOffsetBeforeToggle
+                ?? CGPoint(x: currentViewportOffset().x, y: fallbackVerticalOffset)
+            viewportOffsetBeforeToggle = nil
+            DispatchQueue.main.async { [weak self, weak view] in
+                guard let self, let view else { return }
+                self.isRestoring = true
+                #if os(macOS)
+                view.layoutSubtreeIfNeeded()
+                #else
+                view.layoutIfNeeded()
+                #endif
+                self.restoreViewportOffset(offset)
+                self.isRestoring = false
+            }
         }
 
         func syncState() {
@@ -216,6 +289,7 @@ extension PDFKitView {
                 return
             }
             contentView.postsBoundsChangedNotifications = true
+            updateHorizontalScrollAllowance(parent.horizontalScrollAllowance)
             observers.append(NotificationCenter.default.addObserver(
                 forName: NSView.boundsDidChangeNotification,
                 object: contentView,
@@ -229,12 +303,25 @@ extension PDFKitView {
             Double(view?.documentView?.enclosingScrollView?.contentView.bounds.origin.y ?? 0)
         }
 
+        private func currentViewportOffset() -> CGPoint {
+            let origin = view?.documentView?.enclosingScrollView?.contentView.bounds.origin ?? .zero
+            return CGPoint(x: origin.x, y: origin.y)
+        }
+
         func restoreScrollOffset(_ offset: Double) {
             guard offset > 0,
                   let contentView = view?.documentView?.enclosingScrollView?.contentView else {
                 return
             }
             contentView.scroll(to: NSPoint(x: contentView.bounds.origin.x, y: offset))
+            contentView.enclosingScrollView?.reflectScrolledClipView(contentView)
+        }
+
+        private func restoreViewportOffset(_ offset: CGPoint) {
+            guard let contentView = view?.documentView?.enclosingScrollView?.contentView else {
+                return
+            }
+            contentView.scroll(to: NSPoint(x: offset.x, y: offset.y))
             contentView.enclosingScrollView?.reflectScrolledClipView(contentView)
         }
         #else
@@ -247,10 +334,15 @@ extension PDFKitView {
                 [weak self] _, _ in
                 Task { @MainActor in self?.syncState() }
             }
+            updateHorizontalScrollAllowance(parent.horizontalScrollAllowance)
         }
 
         private func currentScrollOffset() -> Double {
             Double(view?.descendantScrollView?.contentOffset.y ?? 0)
+        }
+
+        private func currentViewportOffset() -> CGPoint {
+            view?.descendantScrollView?.contentOffset ?? .zero
         }
 
         func restoreScrollOffset(_ offset: Double) {
@@ -259,6 +351,10 @@ extension PDFKitView {
                 CGPoint(x: scrollView.contentOffset.x, y: offset), animated: false
             )
         }
+
+        private func restoreViewportOffset(_ offset: CGPoint) {
+            view?.descendantScrollView?.setContentOffset(offset, animated: false)
+        }
         #endif
 
         deinit {
@@ -266,6 +362,129 @@ extension PDFKitView {
         }
     }
 }
+
+#if os(macOS)
+extension PDFKitView.Coordinator: NSGestureRecognizerDelegate {
+    func gestureRecognizer(
+        _ gestureRecognizer: NSGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: NSGestureRecognizer
+    ) -> Bool {
+        true
+    }
+}
+#else
+extension PDFKitView.Coordinator: UIGestureRecognizerDelegate {
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        true
+    }
+}
+#endif
+
+struct PDFThumbnailStrip: View {
+    let url: URL
+    @Binding var pageIndex: Int
+    @State private var document: PDFDocument?
+
+    var body: some View {
+        GeometryReader { geometry in
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal) {
+                    LazyHStack(spacing: 8) {
+                        if let document {
+                            ForEach(0..<document.pageCount, id: \.self) { index in
+                                Button {
+                                    pageIndex = index
+                                } label: {
+                                    PDFPageThumbnail(
+                                        document: document,
+                                        pageIndex: index,
+                                        isSelected: pageIndex == index
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .id(index)
+                            }
+                        }
+                    }
+                    .frame(minWidth: max(geometry.size.width - 20, 0), alignment: .center)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                }
+                .scrollIndicators(.hidden)
+                .background(.bar)
+                .onAppear {
+                    proxy.scrollTo(pageIndex, anchor: .center)
+                }
+                .onChange(of: pageIndex) { _, page in
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        proxy.scrollTo(page, anchor: .center)
+                    }
+                }
+            }
+        }
+        .frame(height: 92)
+        .task(id: url) {
+            document = PDFDocument(url: url)
+        }
+    }
+}
+
+private struct PDFPageThumbnail: View {
+    let document: PDFDocument
+    let pageIndex: Int
+    let isSelected: Bool
+    @State private var thumbnail: PlatformPDFImage?
+
+    var body: some View {
+        VStack(spacing: 3) {
+            Group {
+                if let thumbnail {
+                    #if os(macOS)
+                    Image(nsImage: thumbnail)
+                        .resizable()
+                    #else
+                    Image(uiImage: thumbnail)
+                        .resizable()
+                    #endif
+                } else {
+                    Rectangle().fill(.quaternary)
+                }
+            }
+            .scaledToFit()
+            .frame(width: 52, height: 64)
+            .background(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+            .overlay {
+                RoundedRectangle(cornerRadius: 3)
+                    .stroke(
+                        isSelected ? Color.accentColor : Color.secondary.opacity(0.25),
+                        lineWidth: isSelected ? 2 : 0.5
+                    )
+            }
+
+            Text("\(pageIndex + 1)")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+        }
+        .frame(width: 58)
+        .task(id: pageIndex) {
+            thumbnail = document.page(at: pageIndex)?.thumbnail(
+                of: CGSize(width: 104, height: 128),
+                for: .cropBox
+            )
+        }
+        .accessibilityLabel("Page \(pageIndex + 1)")
+    }
+}
+
+#if os(macOS)
+private typealias PlatformPDFImage = NSImage
+#else
+private typealias PlatformPDFImage = UIImage
+#endif
 
 #if os(macOS)
 private final class PaperPDFView: PDFView {

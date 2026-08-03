@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ChatRichText: View {
     let source: String
+    var isStreaming = false
     let onOpenPage: (Int) -> Void
 
     private var blocks: [ChatRichBlock] {
@@ -14,22 +15,43 @@ struct ChatRichText: View {
             ForEach(blocks) { block in
                 switch block.kind {
                 case let .markdown(content):
-                    let linkedContent = PageCitationLinks.markdown(in: content)
-                    if InlineMathDocument.containsMath(in: linkedContent) {
-                        InlineMathText(source: linkedContent, fontSize: 16)
+                    if isStreaming {
+                        if InlineMathDocument.containsMath(in: content) {
+                            InlineMathText(
+                                source: content,
+                                fontSize: 16,
+                                rendersMarkdown: false
+                            )
+                        } else {
+                            Text(content)
+                                .font(.body)
+                                .textSelection(.enabled)
+                        }
                     } else {
-                        Text(markdown(linkedContent))
-                            .font(.body)
-                            .textSelection(.enabled)
+                        let linkedContent = PageCitationLinks.markdown(in: content)
+                        if InlineMathDocument.containsMath(in: linkedContent) {
+                            InlineMathText(source: linkedContent, fontSize: 16)
+                        } else {
+                            Text(markdown(linkedContent))
+                                .font(.body)
+                                .textSelection(.enabled)
+                        }
                     }
+                case let .plain(content):
+                    Text(content)
+                        .font(.body)
+                        .textSelection(.enabled)
                 case let .math(content):
-                    MathTypesetView(
-                        latex: content,
-                        mode: .display,
-                        fontSize: 17
-                    )
-                    .fixedSize(horizontal: true, vertical: false)
-                    .frame(maxWidth: .infinity, alignment: .center)
+                    ScrollView(.horizontal) {
+                        MathTypesetView(
+                            latex: content,
+                            mode: .display,
+                            fontSize: 17
+                        )
+                        .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .defaultScrollAnchor(.center, for: .alignment)
+                    .frame(maxWidth: .infinity)
                 case let .code(language, content):
                     VStack(alignment: .leading, spacing: 5) {
                         if !language.isEmpty {
@@ -92,9 +114,14 @@ private enum PageCitationLinks {
 private struct InlineMathText: View {
     let source: String
     let fontSize: CGFloat
+    var rendersMarkdown = true
 
     var body: some View {
-        InlineMathDocument.text(from: source, fontSize: fontSize)
+        InlineMathDocument.text(
+            from: source,
+            fontSize: fontSize,
+            rendersMarkdown: rendersMarkdown
+        )
             .font(.body)
             .textSelection(.enabled)
     }
@@ -103,6 +130,7 @@ private struct InlineMathText: View {
 private struct ChatRichBlock: Identifiable {
     enum Kind {
         case markdown(String)
+        case plain(String)
         case math(String)
         case code(language: String, content: String)
     }
@@ -116,6 +144,7 @@ private struct ChatRichBlock: Identifiable {
         var markdownLines: [String] = []
         var codeLines: [String] = []
         var mathLines: [String] = []
+        var unfinishedMathSource: String?
         var codeLanguage = ""
         var inCode = false
         var mathClosingDelimiter: String?
@@ -150,12 +179,14 @@ private struct ChatRichBlock: Identifiable {
                     append(.math(mathLines.joined(separator: "\n")))
                     mathLines = []
                     mathClosingDelimiter = nil
+                    unfinishedMathSource = nil
                     let remainder = line[range.upperBound...]
                     if !remainder.trimmingCharacters(in: .whitespaces).isEmpty {
                         markdownLines.append(String(remainder))
                     }
                 } else {
                     mathLines.append(line)
+                    unfinishedMathSource? += "\n" + line
                 }
                 continue
             }
@@ -178,6 +209,7 @@ private struct ChatRichBlock: Identifiable {
                 } else {
                     if !afterOpening.isEmpty { mathLines.append(afterOpening) }
                     mathClosingDelimiter = closing
+                    unfinishedMathSource = line
                 }
             } else if trimmed.isEmpty {
                 flushMarkdown()
@@ -188,8 +220,8 @@ private struct ChatRichBlock: Identifiable {
 
         if inCode {
             append(.code(language: codeLanguage, content: codeLines.joined(separator: "\n")))
-        } else if mathClosingDelimiter != nil {
-            append(.math(mathLines.joined(separator: "\n")))
+        } else if let unfinishedMathSource {
+            append(.plain(unfinishedMathSource))
         }
         flushMarkdown()
         return result.isEmpty ? [ChatRichBlock(id: 0, kind: .markdown(source))] : result
@@ -208,13 +240,20 @@ private enum InlineMathDocument {
         mathRanges(in: source).isEmpty == false
     }
 
-    static func text(from source: String, fontSize: CGFloat) -> Text {
+    static func text(
+        from source: String,
+        fontSize: CGFloat,
+        rendersMarkdown: Bool = true
+    ) -> Text {
         let ranges = mathRanges(in: source)
-        guard !ranges.isEmpty else { return Text(markdown(source)) }
+        guard !ranges.isEmpty else {
+            return rendersMarkdown ? Text(markdown(source)) : Text(source)
+        }
         var result = Text("")
         var cursor = source.startIndex
         for range in ranges {
-            result = result + Text(markdown(String(source[cursor..<range.full.lowerBound])))
+            let prefix = String(source[cursor..<range.full.lowerBound])
+            result = result + (rendersMarkdown ? Text(markdown(prefix)) : Text(prefix))
             let latex = String(source[range.content])
             if let image = mathImage(latex: latex, fontSize: fontSize) {
                 result = result + Text(image).baselineOffset(-2)
@@ -223,7 +262,8 @@ private enum InlineMathDocument {
             }
             cursor = range.full.upperBound
         }
-        result = result + Text(markdown(String(source[cursor...])))
+        let suffix = String(source[cursor...])
+        result = result + (rendersMarkdown ? Text(markdown(suffix)) : Text(suffix))
         return result
     }
 

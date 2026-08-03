@@ -66,14 +66,33 @@ struct SignInView: View {
 }
 
 struct LibraryWorkspace: View {
+    @EnvironmentObject private var model: AppModel
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
+    @State private var visibilityBeforeImmersive: NavigationSplitViewVisibility = .automatic
+    @State private var isPDFImmersive = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             LibrarySidebar()
                 .navigationSplitViewColumnWidth(min: 170, ideal: 225, max: 300)
         } detail: {
-            WorkspaceDetail()
+            WorkspaceDetail(isPDFImmersive: $isPDFImmersive)
+        }
+        .navigationSplitViewStyle(.prominentDetail)
+        .onChange(of: isPDFImmersive) { _, isImmersive in
+            if isImmersive {
+                visibilityBeforeImmersive = columnVisibility
+                columnVisibility = .detailOnly
+            } else {
+                columnVisibility = visibilityBeforeImmersive
+            }
+        }
+        .onChange(of: model.route) { _, route in
+            guard isPDFImmersive else { return }
+            if case .paper = route { return }
+            withAnimation(.smooth(duration: 0.28)) {
+                isPDFImmersive = false
+            }
         }
     }
 }
@@ -196,6 +215,7 @@ struct SidebarButton: View {
 struct WorkspaceDetail: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.openURL) private var openURL
+    @Binding var isPDFImmersive: Bool
 
     var body: some View {
         ZStack {
@@ -227,7 +247,7 @@ struct WorkspaceDetail: View {
             }
 
             ForEach(model.openSessions) { session in
-                ReaderWorkspace(session: session)
+                ReaderWorkspace(session: session, isImmersive: $isPDFImmersive)
                     .opacity(model.route == .paper(session.id) ? 1 : 0)
                     .allowsHitTesting(model.route == .paper(session.id))
                     .accessibilityHidden(model.route != .paper(session.id))
@@ -236,6 +256,8 @@ struct WorkspaceDetail: View {
         }
         .navigationTitle(navigationTitle)
         .paperNavigationSubtitle(navigationSubtitle)
+        .paperNavigationTitleStyle()
+        .paperChromeHidden(isPDFImmersive)
         .background {
             WorkspaceShortcuts()
         }
@@ -828,10 +850,15 @@ struct ChatsPage: View {
 
 struct ReaderWorkspace: View {
     @ObservedObject var session: PaperSession
+    @Binding var isImmersive: Bool
 
     var body: some View {
         GeometryReader { geometry in
-            ReaderLayout(session: session, availableWidth: geometry.size.width)
+            ReaderLayout(
+                session: session,
+                availableWidth: geometry.size.width,
+                isImmersive: $isImmersive
+            )
         }
     }
 }
@@ -839,14 +866,27 @@ struct ReaderWorkspace: View {
 struct ReaderLayout: View {
     @ObservedObject var session: PaperSession
     let availableWidth: CGFloat
+    @Binding var isImmersive: Bool
 
     private var usesOverlayChat: Bool { availableWidth < 820 }
+    private var presentedChatWidth: CGFloat {
+        guard !isImmersive, session.isChatPresented else { return 0 }
+        if usesOverlayChat {
+            return min(max(availableWidth * 0.88, 300), 430)
+        }
+        return min(session.chatWidth, availableWidth * 0.48)
+    }
 
     var body: some View {
         ZStack(alignment: .trailing) {
-            if usesOverlayChat {
-                PDFPane(session: session)
-                if session.isChatPresented {
+            PDFPane(
+                session: session,
+                isImmersive: $isImmersive,
+                horizontalScrollAllowance: presentedChatWidth
+            )
+
+            if !isImmersive, session.isChatPresented {
+                if usesOverlayChat {
                     Color.black.opacity(0.12)
                         .ignoresSafeArea()
                         .contentShape(Rectangle())
@@ -858,18 +898,11 @@ struct ReaderLayout: View {
                         .background(.regularMaterial)
                         .shadow(color: .black.opacity(0.2), radius: 18, x: -5)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
-            } else {
-                HStack(spacing: 0) {
-                    PDFPane(session: session)
-                        .frame(maxWidth: .infinity)
-                    if session.isChatPresented {
-                        ChatResizeHandle(session: session, totalWidth: availableWidth)
-                            .zIndex(10)
-                        ChatPane(session: session)
-                            .frame(width: min(session.chatWidth, availableWidth * 0.48))
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
-                    }
+                } else {
+                    ResizableChatSidebar(session: session, totalWidth: availableWidth)
+                    .background(.regularMaterial)
+                    .shadow(color: .black.opacity(0.16), radius: 14, x: -4)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
         }
@@ -877,10 +910,49 @@ struct ReaderLayout: View {
     }
 }
 
-struct ChatResizeHandle: View {
+private struct ResizableChatSidebar: View {
     @ObservedObject var session: PaperSession
     let totalWidth: CGFloat
-    @State private var dragStartWidth: CGFloat?
+    @State private var transientWidth: CGFloat?
+
+    private var maximumWidth: CGFloat { totalWidth * 0.48 }
+    private var committedWidth: CGFloat {
+        min(max(session.chatWidth, 300), maximumWidth)
+    }
+    private var displayedWidth: CGFloat { transientWidth ?? committedWidth }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ChatResizeHandle(
+                initialWidth: displayedWidth,
+                totalWidth: totalWidth,
+                onChanged: { transientWidth = $0 },
+                onEnded: { width in
+                    if abs(session.chatWidth - width) > 0.5 {
+                        session.chatWidth = width
+                    }
+                    transientWidth = nil
+                }
+            )
+            .zIndex(10)
+            ChatPane(session: session)
+                .frame(width: displayedWidth)
+        }
+    }
+}
+
+struct ChatResizeHandle: View {
+    let initialWidth: CGFloat
+    let totalWidth: CGFloat
+    let onChanged: (CGFloat) -> Void
+    let onEnded: (CGFloat) -> Void
+    @State private var dragOrigin: DragOrigin?
+    @State private var latestWidth: CGFloat?
+
+    private struct DragOrigin {
+        let sidebarWidth: CGFloat
+        let pointerX: CGFloat
+    }
 
     var body: some View {
         ZStack {
@@ -898,13 +970,27 @@ struct ChatResizeHandle: View {
             #endif
         }
         .gesture(
-            DragGesture(minimumDistance: 0)
+            DragGesture(minimumDistance: 0, coordinateSpace: .global)
                 .onChanged { value in
-                    if dragStartWidth == nil { dragStartWidth = session.chatWidth }
-                    let proposed = (dragStartWidth ?? session.chatWidth) - value.translation.width
-                    session.chatWidth = min(max(proposed, 300), totalWidth * 0.55)
+                    if dragOrigin == nil {
+                        dragOrigin = DragOrigin(
+                            sidebarWidth: initialWidth,
+                            pointerX: value.startLocation.x
+                        )
+                    }
+                    guard let dragOrigin else { return }
+                    let proposed = dragOrigin.sidebarWidth
+                        + dragOrigin.pointerX
+                        - value.location.x
+                    let width = min(max(proposed, 300), totalWidth * 0.48)
+                    latestWidth = width
+                    onChanged(width)
                 }
-                .onEnded { _ in dragStartWidth = nil }
+                .onEnded { _ in
+                    onEnded(latestWidth ?? initialWidth)
+                    latestWidth = nil
+                    dragOrigin = nil
+                }
         )
     }
 }
@@ -912,6 +998,8 @@ struct ChatResizeHandle: View {
 struct PDFPane: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var session: PaperSession
+    @Binding var isImmersive: Bool
+    let horizontalScrollAllowance: CGFloat
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -946,14 +1034,20 @@ struct PDFPane: View {
                             }
                         ),
                         selectedText: $session.selectedText,
-                        highlightTarget: session.pdfHighlightTarget
-                    )
+                        highlightTarget: session.pdfHighlightTarget,
+                        isImmersive: isImmersive,
+                        horizontalScrollAllowance: horizontalScrollAllowance
+                    ) {
+                        withAnimation(.smooth(duration: 0.28)) {
+                            isImmersive.toggle()
+                        }
+                    }
                 } else {
                     ProgressView("Downloading PDF…")
                 }
             }
 
-            if session.isPDFSearchPresented {
+            if !isImmersive, session.isPDFSearchPresented {
                 PDFSearchPanel(session: session)
                     .frame(width: 360)
                     .padding(10)
@@ -961,22 +1055,18 @@ struct PDFPane: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            HStack {
-                Text("Page \(session.pageIndex + 1)")
-                if session.zoomScale > 0 {
-                    Text("· \(Int(session.zoomScale * 100))%")
-                }
-                Spacer()
-                if let selection = session.selectedText, !selection.isEmpty {
-                    Label("Selection ready for chat", systemImage: "text.quote")
-                        .foregroundStyle(.tint)
-                }
+            if !isImmersive, let url = session.pdfURL {
+                PDFThumbnailStrip(
+                    url: url,
+                    pageIndex: Binding(
+                        get: { session.pageIndex },
+                        set: { model.pageChanged($0, in: session) }
+                    )
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            .font(.caption)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(.bar)
         }
+        .animation(.smooth(duration: 0.28), value: isImmersive)
     }
 }
 
@@ -1169,6 +1259,15 @@ struct ConversationView: View {
                             MessageBubble(message: message, session: session)
                                 .id(message.id)
                         }
+                        if let streamingMessage = session.streamingMessage {
+                            StreamingMessageBubble(
+                                message: streamingMessage,
+                                session: session
+                            ) {
+                                proxy.scrollTo(streamingMessage.id, anchor: .bottom)
+                            }
+                            .id(streamingMessage.id)
+                        }
                     }
                     .padding(12)
                 }
@@ -1228,7 +1327,10 @@ struct ChatComposer: View {
                     .labelStyle(.iconOnly)
                     .font(.title2)
                     .buttonStyle(.plain)
-                    .disabled(session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(
+                        session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || session.streamingMessage != nil
+                    )
                 }
             }
             .padding(8)
@@ -1324,6 +1426,31 @@ struct MessageBubble: View {
                 spacing: 5
             ) {
                 VStack(alignment: .leading, spacing: 5) {
+                    if message.role == "user",
+                       let selectedText = message.selectedText?.trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                       ),
+                       !selectedText.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label("PDF selection", systemImage: "text.quote")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Text(selectedText)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(
+                            Color.secondary.opacity(0.1),
+                            in: RoundedRectangle(cornerRadius: 8)
+                        )
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.secondary.opacity(0.22), lineWidth: 0.5)
+                        }
+                    }
                     if message.status == "failed", message.content.isEmpty {
                         Label(
                             "Response failed. You can try again or keep chatting.",
@@ -1336,7 +1463,10 @@ struct MessageBubble: View {
                             .controlSize(.small)
                             .padding(.vertical, 2)
                     } else {
-                        ChatRichText(source: message.content) { page in
+                        ChatRichText(
+                            source: message.content,
+                            isStreaming: message.status == "streaming"
+                        ) { page in
                             model.pageChanged(page - 1, in: session)
                         }
                     }
@@ -1391,6 +1521,20 @@ struct MessageBubble: View {
     }
 }
 
+private struct StreamingMessageBubble: View {
+    @ObservedObject var message: StreamingChatMessage
+    @ObservedObject var session: PaperSession
+    let onContentUpdate: () -> Void
+
+    var body: some View {
+        MessageBubble(message: message.snapshot, session: session)
+            .onAppear(perform: onContentUpdate)
+            .onChange(of: message.content) { _, _ in
+                onContentUpdate()
+            }
+    }
+}
+
 private func paperMetadata(_ authors: [Creator], _ year: String?) -> String {
     [authors.map(\.displayName).filter { !$0.isEmpty }.joined(separator: ", "), year]
         .compactMap { $0 }
@@ -1418,6 +1562,25 @@ extension Color {
 }
 
 private extension View {
+    @ViewBuilder
+    func paperChromeHidden(_ hidden: Bool) -> some View {
+        #if os(macOS)
+        toolbarVisibility(hidden ? .hidden : .visible, for: .windowToolbar)
+        #else
+        toolbarVisibility(hidden ? .hidden : .visible, for: .navigationBar)
+            .statusBarHidden(hidden)
+        #endif
+    }
+
+    @ViewBuilder
+    func paperNavigationTitleStyle() -> some View {
+        #if os(macOS)
+        self
+        #else
+        navigationBarTitleDisplayMode(.inline)
+        #endif
+    }
+
     @ViewBuilder
     func paperNavigationSubtitle(_ subtitle: String) -> some View {
         #if os(macOS)

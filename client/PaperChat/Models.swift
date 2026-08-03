@@ -118,6 +118,68 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+@MainActor
+final class StreamingChatMessage: ObservableObject, Identifiable {
+    let id: String
+    let threadID: String
+    let createdAt: String
+    @Published private(set) var content = ""
+    @Published private(set) var status = "streaming"
+
+    private var pendingContent = ""
+    private var flushTask: Task<Void, Never>?
+
+    init(
+        id: String = UUID().uuidString,
+        threadID: String,
+        createdAt: String = ISO8601DateFormatter().string(from: Date())
+    ) {
+        self.id = id
+        self.threadID = threadID
+        self.createdAt = createdAt
+    }
+
+    func append(_ delta: String) {
+        pendingContent += delta
+        guard flushTask == nil else { return }
+        flushTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(60))
+            guard !Task.isCancelled else { return }
+            self?.flushPendingContent()
+        }
+    }
+
+    func finish(status: String) {
+        flushTask?.cancel()
+        flushTask = nil
+        flushPendingContent()
+        self.status = status
+    }
+
+    var snapshot: ChatMessage {
+        ChatMessage(
+            id: id,
+            threadID: threadID,
+            role: "assistant",
+            content: content,
+            pageRefs: [],
+            selectedText: nil,
+            status: status,
+            createdAt: createdAt
+        )
+    }
+
+    private func flushPendingContent() {
+        guard !pendingContent.isEmpty else {
+            flushTask = nil
+            return
+        }
+        content += pendingContent
+        pendingContent = ""
+        flushTask = nil
+    }
+}
+
 struct PageReference: Codable, Hashable, Sendable {
     let pageIndex: Int
 }
@@ -265,6 +327,7 @@ final class PaperSession: ObservableObject, Identifiable {
     @Published var threads: [ChatThread] = []
     @Published var selectedThread: ChatThread?
     @Published var messages: [ChatMessage] = []
+    @Published var streamingMessage: StreamingChatMessage?
     @Published var isChatPresented = false
     @Published var chatRoute: ChatRoute = .list
     @Published var chatWidth: CGFloat = 390

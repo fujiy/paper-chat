@@ -386,6 +386,7 @@ final class AppModel: ObservableObject {
     func beginNewChat(in session: PaperSession) {
         session.selectedThread = nil
         session.messages = []
+        session.streamingMessage = nil
         session.chatRoute = .compose
         session.isChatPresented = true
     }
@@ -397,6 +398,7 @@ final class AppModel: ObservableObject {
     private func selectThread(_ thread: ChatThread, in session: PaperSession) async throws {
         session.selectedThread = thread
         session.chatRoute = .conversation
+        session.streamingMessage = nil
         session.messages = try await client.messages(threadID: thread.id)
         try await saveReadingState(session)
     }
@@ -404,7 +406,8 @@ final class AppModel: ObservableObject {
     func send(in session: PaperSession) async {
         let question = session.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { return }
-        var messageCountBeforeSend = session.messages.count
+        let selectedText = session.selectedText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let messageCountBeforeSend = session.messages.count
 
         do {
             let thread: ChatThread
@@ -426,60 +429,53 @@ final class AppModel: ObservableObject {
                 role: "user",
                 content: question,
                 pageRefs: [.init(pageIndex: session.pageIndex)],
-                selectedText: session.selectedText,
+                selectedText: selectedText,
                 status: "completed",
                 createdAt: ISO8601DateFormatter().string(from: Date())
             )
             session.messages.append(localUser)
-            var assistant = ChatMessage(
-                id: UUID().uuidString,
-                threadID: thread.id,
-                role: "assistant",
-                content: "",
-                pageRefs: [],
-                selectedText: nil,
-                status: "streaming",
-                createdAt: ISO8601DateFormatter().string(from: Date())
-            )
-            session.messages.append(assistant)
-            let assistantIndex = session.messages.count - 1
-            messageCountBeforeSend = assistantIndex - 1
+            let assistant = StreamingChatMessage(threadID: thread.id)
+            session.streamingMessage = assistant
             for try await event in await client.streamMessage(
                 threadID: thread.id,
                 content: question,
                 pageIndex: session.pageIndex,
-                selectedText: session.selectedText,
+                selectedText: selectedText,
                 model: selectedModel?.model,
                 effort: selectedEffortID
             ) {
                 switch event {
                 case let .delta(text):
-                    assistant.content += text
-                    session.messages[assistantIndex] = assistant
+                    assistant.append(text)
                 case .failure:
-                    assistant.status = "failed"
-                    session.messages[assistantIndex] = assistant
+                    assistant.finish(status: "failed")
                     if let messages = try? await client.messages(threadID: thread.id) {
                         session.messages = messages
+                        session.streamingMessage = nil
                     }
                 case .done:
+                    assistant.finish(status: "completed")
                     session.messages = try await client.messages(threadID: thread.id)
+                    session.streamingMessage = nil
                     await refreshChatOverviews()
                 case .message:
                     break
                 }
             }
         } catch {
+            session.streamingMessage?.finish(status: "failed")
             if let thread = session.selectedThread,
                let messages = try? await client.messages(threadID: thread.id) {
                 let requestReachedServer = messages.count > messageCountBeforeSend
                 session.messages = messages
+                session.streamingMessage = nil
                 if !requestReachedServer {
                     session.draft = question
                 }
             } else {
                 session.draft = question
                 session.messages = Array(session.messages.prefix(messageCountBeforeSend))
+                session.streamingMessage = nil
             }
         }
     }
