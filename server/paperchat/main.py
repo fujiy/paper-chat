@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from contextlib import asynccontextmanager
+from itertools import count
 from typing import Annotated
 
 import uvicorn
@@ -23,11 +26,62 @@ from .library import ZoteroLibrary
 from .llm import backend
 
 
+class ThreadEventBroker:
+    """In-process invalidation events for the single PaperChat API instance."""
+
+    def __init__(self) -> None:
+        self._subscribers: dict[str, set[asyncio.Queue[int]]] = {}
+        self._event_ids = count(1)
+
+    def reset(self) -> None:
+        self._subscribers.clear()
+        self._event_ids = count(1)
+
+    def subscribe(self, thread_id: str) -> asyncio.Queue[int]:
+        queue: asyncio.Queue[int] = asyncio.Queue(maxsize=1)
+        self._subscribers.setdefault(thread_id, set()).add(queue)
+        return queue
+
+    def unsubscribe(self, thread_id: str, queue: asyncio.Queue[int]) -> None:
+        subscribers = self._subscribers.get(thread_id)
+        if not subscribers:
+            return
+        subscribers.discard(queue)
+        if not subscribers:
+            self._subscribers.pop(thread_id, None)
+
+    def publish(self, thread_id: str) -> None:
+        event_id = next(self._event_ids)
+        for queue in tuple(self._subscribers.get(thread_id, ())):
+            if queue.full():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+            queue.put_nowait(event_id)
+
+
+thread_events = ThreadEventBroker()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = load_settings()
     settings.ensure_dirs()
     init(settings.resolved_database_path)
+    thread_events.reset()
+    with connect(settings.resolved_database_path) as conn:
+        # A process restart interrupts active generators. Make their persisted
+        # state usable again instead of leaving a thread permanently locked.
+        conn.execute(
+            "UPDATE messages SET status = 'failed', updated_at = ? WHERE status = 'streaming'",
+            (now(),),
+        )
+        conn.execute(
+            "UPDATE threads SET backend_status = 'ready', updated_at = ? "
+            "WHERE backend_status = 'streaming'",
+            (now(),),
+        )
     yield
 
 
@@ -427,8 +481,38 @@ def messages(thread_id: str, _: Session, settings: SettingsDependency):
     return [as_dict(row) for row in rows]
 
 
-def sse(event: str, data: dict) -> str:
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+def sse(event: str, data: dict, event_id: int | None = None) -> str:
+    identifier = f"id: {event_id}\n" if event_id is not None else ""
+    return f"{identifier}event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@app.get("/api/threads/{thread_id}/events")
+async def message_events(thread_id: str, _: Session, settings: SettingsDependency):
+    with connect(settings.resolved_database_path) as conn:
+        if not conn.execute("SELECT 1 FROM threads WHERE id = ?", (thread_id,)).fetchone():
+            raise HTTPException(404, "Thread not found")
+
+    queue = thread_events.subscribe(thread_id)
+
+    async def generate():
+        try:
+            # The initial invalidation closes the race between the client's
+            # messages request and establishing this subscription.
+            yield sse("sync", {"thread_id": thread_id})
+            while True:
+                try:
+                    event_id = await asyncio.wait_for(queue.get(), timeout=20)
+                    yield sse("sync", {"thread_id": thread_id}, event_id)
+                except TimeoutError:
+                    yield ": keep-alive\n\n"
+        finally:
+            thread_events.unsubscribe(thread_id, queue)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/threads/{thread_id}/messages")
@@ -449,6 +533,15 @@ async def send_message(
         ).fetchone()
         if existing:
             raise HTTPException(409, "client_request_id already used")
+        acquired = conn.execute(
+            """
+            UPDATE threads SET backend_status = 'streaming', updated_at = ?
+            WHERE id = ? AND backend_status = 'ready'
+            """,
+            (timestamp, thread_id),
+        )
+        if acquired.rowcount != 1:
+            raise HTTPException(409, "Thread is already generating a response")
         identifier = conn.execute(
             """
             SELECT value FROM paper_identifiers
@@ -482,6 +575,7 @@ async def send_message(
             """,
             (assistant_id, thread_id, timestamp, timestamp),
         )
+    thread_events.publish(thread_id)
     page_number = payload.current_page_index + 1
     context = ""
     if identifier:
@@ -502,6 +596,26 @@ async def send_message(
 
     async def generate():
         answer = ""
+        terminal = False
+        last_flush = 0.0
+
+        def fail_generation() -> None:
+            nonlocal terminal
+            if terminal:
+                return
+            terminal = True
+            with connect(settings.resolved_database_path) as conn:
+                conn.execute(
+                    "UPDATE messages SET content = ?, status = 'failed', updated_at = ? "
+                    "WHERE id = ?",
+                    (answer, now(), assistant_id),
+                )
+                conn.execute(
+                    "UPDATE threads SET backend_status = 'ready', updated_at = ? WHERE id = ?",
+                    (now(), thread_id),
+                )
+            thread_events.publish(thread_id)
+
         try:
             yield sse("message", {"message_id": assistant_id, "user_message_id": user_id})
             async for event in backend(settings).stream(
@@ -515,6 +629,15 @@ async def send_message(
                         )
                 elif event.kind == "delta":
                     answer += event.text
+                    current_time = time.monotonic()
+                    if current_time - last_flush >= 0.25:
+                        with connect(settings.resolved_database_path) as conn:
+                            conn.execute(
+                                "UPDATE messages SET content = ?, updated_at = ? WHERE id = ?",
+                                (answer, now(), assistant_id),
+                            )
+                        last_flush = current_time
+                        thread_events.publish(thread_id)
                     yield sse("delta", {"message_id": assistant_id, "delta": event.text})
                 elif event.kind == "done":
                     with connect(settings.resolved_database_path) as conn:
@@ -526,17 +649,23 @@ async def send_message(
                             (answer, event.backend_turn_id, now(), assistant_id),
                         )
                         conn.execute(
-                            "UPDATE threads SET last_used_at = ?, updated_at = ? WHERE id = ?",
+                            """
+                            UPDATE threads SET last_used_at = ?, updated_at = ?,
+                              backend_status = 'ready' WHERE id = ?
+                            """,
                             (now(), now(), thread_id),
                         )
+                    terminal = True
+                    thread_events.publish(thread_id)
                     yield sse("done", {"message_id": assistant_id})
+        except asyncio.CancelledError:
+            fail_generation()
+            raise
         except Exception as error:
-            with connect(settings.resolved_database_path) as conn:
-                conn.execute(
-                    "UPDATE messages SET content = ?, status = 'failed', updated_at = ? WHERE id = ?",
-                    (answer, now(), assistant_id),
-                )
+            fail_generation()
             yield sse("error", {"message_id": assistant_id, "detail": str(error)})
+        finally:
+            fail_generation()
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

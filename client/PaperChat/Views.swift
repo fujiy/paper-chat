@@ -1257,6 +1257,10 @@ struct ConversationView: View {
                     .font(.headline)
                     .lineLimit(1)
                 Spacer()
+                Button("Refresh Chat", systemImage: "arrow.clockwise") {
+                    Task { await model.refreshConversation(in: session) }
+                }
+                .labelStyle(.iconOnly)
                 Button("New Chat", systemImage: "square.and.pencil") {
                     model.beginNewChat(in: session)
                 }
@@ -1296,10 +1300,20 @@ struct ConversationView: View {
                         withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
                 }
+                .refreshable {
+                    await model.refreshConversation(in: session)
+                }
             }
 
             Divider()
             ChatComposer(session: session)
+        }
+        .task(
+            id: "\(session.selectedThread?.id ?? "none"):"
+                + "\(model.route == .paper(session.id) && session.isChatPresented)"
+        ) {
+            guard model.route == .paper(session.id), session.isChatPresented else { return }
+            await model.followConversation(in: session)
         }
     }
 }
@@ -1350,6 +1364,7 @@ struct ChatComposer: View {
                     .disabled(
                         session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             || session.streamingMessage != nil
+                            || session.messages.contains(where: { $0.status == "streaming" })
                     )
                 }
             }

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 from paperchat.config import Settings, load_settings
-from paperchat.main import app
+from paperchat.db import connect, now
+from paperchat.main import ThreadEventBroker, app
 
 
 def client_for(tmp_path, monkeypatch) -> TestClient:
@@ -178,6 +179,54 @@ def test_paper_thread_reading_state_and_streaming_chat(tmp_path, monkeypatch):
     assert messages[1]["status"] == "completed"
     assert "[p. 1]" in messages[1]["content"]
     assert paper_after["reading_state"]["page_index"] == 4
+
+
+def test_thread_event_broker_coalesces_invalidations():
+    broker = ThreadEventBroker()
+    queue = broker.subscribe("thread-1")
+
+    broker.publish("thread-1")
+    broker.publish("thread-1")
+    broker.publish("another-thread")
+
+    assert queue.qsize() == 1
+    assert queue.get_nowait() == 2
+    broker.unsubscribe("thread-1", queue)
+    broker.publish("thread-1")
+    assert queue.empty()
+
+
+def test_thread_rejects_a_second_generation(tmp_path, monkeypatch):
+    with client_for(tmp_path, monkeypatch) as client:
+        headers = {"Authorization": f"Bearer {register(client)['access_token']}"}
+        paper = client.post(
+            "/api/papers/resolve", json={"attachment_key": "ATT1"}, headers=headers
+        ).json()
+        thread = client.post(
+            f"/api/papers/{paper['id']}/threads", json={"title": "Main"}, headers=headers
+        ).json()
+        with connect(tmp_path / "database" / "paperchat.sqlite3") as conn:
+            conn.execute(
+                "UPDATE threads SET backend_status = 'streaming', updated_at = ? WHERE id = ?",
+                (now(), thread["id"]),
+            )
+
+        response = client.post(
+            f"/api/threads/{thread['id']}/messages",
+            json={
+                "content": "Can this overlap?",
+                "current_page_index": 0,
+                "client_request_id": "request-overlap",
+            },
+            headers=headers,
+        )
+        messages = client.get(
+            f"/api/threads/{thread['id']}/messages", headers=headers
+        ).json()
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Thread is already generating a response"
+    assert messages == []
 
 
 def test_text_availability_is_false_without_indexed_text(tmp_path, monkeypatch):

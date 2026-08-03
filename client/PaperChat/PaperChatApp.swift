@@ -21,10 +21,15 @@ struct PaperChatApp: App {
 
 struct PaperChatWindow: View {
     @StateObject private var model = AppModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         RootView()
             .environmentObject(model)
             .task { await model.restoreSession() }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                Task { await model.appDidBecomeActive() }
+            }
     }
 }

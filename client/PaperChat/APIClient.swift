@@ -203,6 +203,41 @@ actor APIClient {
         }
     }
 
+    func threadEvents(threadID: String) -> AsyncThrowingStream<Void, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    var request = try authorizedRequest("api/threads/\(threadID)/events")
+                    var result = try await session.bytes(for: request)
+                    if (result.1 as? HTTPURLResponse)?.statusCode == 401 {
+                        try await refresh()
+                        request = try withLatestAccessToken(request)
+                        result = try await session.bytes(for: request)
+                    }
+                    guard let http = result.1 as? HTTPURLResponse, http.statusCode == 200 else {
+                        throw APIError.http((result.1 as? HTTPURLResponse)?.statusCode ?? -1)
+                    }
+                    var eventName = ""
+                    for try await line in result.0.lines {
+                        try Task.checkCancellation()
+                        if line.hasPrefix("event: ") {
+                            eventName = String(line.dropFirst(7))
+                        } else if line.hasPrefix("data: "), eventName == "sync" {
+                            continuation.yield(())
+                            eventName = ""
+                        }
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
     private func request<Response: Decodable, Body: Encodable>(
         _ path: String,
         method: String = "GET",

@@ -414,6 +414,65 @@ final class AppModel: ObservableObject {
         try await saveReadingState(session)
     }
 
+    func refreshConversation(in session: PaperSession) async {
+        guard let threadID = session.selectedThread?.id else { return }
+        // The sending device owns its transient streaming bubble until its
+        // POST stream finishes. Event invalidations still keep other devices
+        // current without duplicating that local bubble or extra reads.
+        guard session.streamingMessage == nil else { return }
+        do {
+            let messages = try await client.messages(threadID: threadID)
+            guard session.selectedThread?.id == threadID else { return }
+            guard session.streamingMessage == nil else { return }
+            session.messages = messages
+            if !messages.contains(where: { $0.status == "streaming" }) {
+                await refreshChatOverviews()
+            }
+        } catch {
+            guard !Task.isCancelled, !Self.isCancellation(error) else { return }
+            report(error)
+        }
+    }
+
+    func followConversation(in session: PaperSession) async {
+        guard let threadID = session.selectedThread?.id else { return }
+        var retryDelay = 1
+        while !Task.isCancelled, session.selectedThread?.id == threadID {
+            do {
+                for try await _ in await client.threadEvents(threadID: threadID) {
+                    guard !Task.isCancelled, session.selectedThread?.id == threadID else { return }
+                    await refreshConversation(in: session)
+                    retryDelay = 1
+                }
+            } catch {
+                guard !Task.isCancelled, !Self.isCancellation(error) else { return }
+            }
+            guard !Task.isCancelled else { return }
+            try? await Task.sleep(for: .seconds(retryDelay))
+            retryDelay = min(retryDelay * 2, 15)
+        }
+    }
+
+    func appDidBecomeActive() async {
+        guard isAuthenticated else { return }
+        await refreshLibrary()
+        guard let session = activeSession else { return }
+        do {
+            let threads = try await client.threads(paperID: session.id)
+            session.threads = threads
+            if let selectedID = session.selectedThread?.id {
+                session.selectedThread = threads.first(where: { $0.id == selectedID })
+                    ?? session.selectedThread
+            }
+        } catch {
+            guard !Self.isCancellation(error) else { return }
+            report(error)
+        }
+        if session.isChatPresented, session.chatRoute == .conversation {
+            await refreshConversation(in: session)
+        }
+    }
+
     func send(in session: PaperSession) async {
         let question = session.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { return }
