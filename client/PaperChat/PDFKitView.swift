@@ -8,7 +8,9 @@ struct PDFKitView: NSViewRepresentable {
     @Binding var zoomScale: Double
     @Binding var scrollOffset: Double
     @Binding var selectedText: String?
+    @Binding var selectionSnapshot: PDFSelectionSnapshot?
     let highlightTarget: PDFHighlightTarget?
+    let viewportTarget: PDFViewportTarget?
     let isImmersive: Bool
     let horizontalScrollAllowance: CGFloat
     let onTap: () -> Void
@@ -33,7 +35,9 @@ struct PDFKitView: UIViewRepresentable {
     @Binding var zoomScale: Double
     @Binding var scrollOffset: Double
     @Binding var selectedText: String?
+    @Binding var selectionSnapshot: PDFSelectionSnapshot?
     let highlightTarget: PDFHighlightTarget?
+    let viewportTarget: PDFViewportTarget?
     let isImmersive: Bool
     let horizontalScrollAllowance: CGFloat
     let onTap: () -> Void
@@ -87,6 +91,7 @@ extension PDFKitView {
             coordinator.isRestoring = false
         }
         coordinator.applyHighlight(highlightTarget)
+        coordinator.applyViewportTarget(viewportTarget)
         coordinator.updateHorizontalScrollAllowance(horizontalScrollAllowance)
         if immersiveChanged {
             coordinator.restoreViewportAfterLayout(scrollOffset)
@@ -146,6 +151,7 @@ extension PDFKitView {
         var lastPageIndex = -1
         var lastScale: Double = -1
         var lastHighlightToken: UUID?
+        var lastViewportToken: UUID?
         var lastImmersive: Bool?
         var lastHorizontalScrollAllowance: CGFloat = -1
         var viewportOffsetBeforeToggle: CGPoint?
@@ -173,17 +179,17 @@ extension PDFKitView {
             observers.append(NotificationCenter.default.addObserver(
                 forName: .PDFViewPageChanged, object: view, queue: .main
             ) { [weak self] _ in
-                Task { @MainActor in self?.syncState() }
+                Task { @MainActor in self?.scheduleStateSync() }
             })
             observers.append(NotificationCenter.default.addObserver(
                 forName: .PDFViewScaleChanged, object: view, queue: .main
             ) { [weak self] _ in
-                Task { @MainActor in self?.syncState() }
+                Task { @MainActor in self?.scheduleStateSync() }
             })
             observers.append(NotificationCenter.default.addObserver(
                 forName: .PDFViewSelectionChanged, object: view, queue: .main
             ) { [weak self] _ in
-                Task { @MainActor in self?.syncSelection() }
+                Task { @MainActor in self?.scheduleSelectionSync() }
             })
             observeScrolling()
         }
@@ -244,13 +250,72 @@ extension PDFKitView {
             let offset = currentScrollOffset()
             lastPageIndex = pageIndex
             lastScale = scale
-            parent.pageIndex = pageIndex
-            parent.zoomScale = scale
-            parent.scrollOffset = offset
+            if parent.pageIndex != pageIndex { parent.pageIndex = pageIndex }
+            if abs(parent.zoomScale - scale) > 0.005 { parent.zoomScale = scale }
+            if abs(parent.scrollOffset - offset) > 0.5 { parent.scrollOffset = offset }
+        }
+
+        private func scheduleStateSync() {
+            guard !isRestoring else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isRestoring else { return }
+                self.syncState()
+            }
+        }
+
+        private func scheduleSelectionSync() {
+            guard !isRestoring else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isRestoring else { return }
+                self.syncSelection()
+            }
         }
 
         private func syncSelection() {
-            parent.selectedText = view?.currentSelection?.string
+            guard let view,
+                  let document = view.document,
+                  let selection = view.currentSelection,
+                  let text = selection.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty else {
+                if parent.selectedText != nil { parent.selectedText = nil }
+                if parent.selectionSnapshot != nil { parent.selectionSnapshot = nil }
+                return
+            }
+            let rects = selection.pages.compactMap { page -> BookmarkSelectionRect? in
+                let pageIndex = document.index(for: page)
+                let pageBounds = page.bounds(for: .cropBox)
+                let bounds = selection.bounds(for: page).intersection(pageBounds)
+                guard pageIndex >= 0, pageBounds.width > 0, pageBounds.height > 0,
+                      !bounds.isNull, bounds.width > 0, bounds.height > 0 else { return nil }
+                return BookmarkSelectionRect(
+                    pageIndex: pageIndex,
+                    x: Double((bounds.minX - pageBounds.minX) / pageBounds.width),
+                    y: Double((bounds.minY - pageBounds.minY) / pageBounds.height),
+                    width: Double(bounds.width / pageBounds.width),
+                    height: Double(bounds.height / pageBounds.height)
+                )
+            }
+            let snapshot: PDFSelectionSnapshot? = rects.isEmpty
+                ? nil
+                : PDFSelectionSnapshot(text: text, rects: rects)
+            if parent.selectedText != text { parent.selectedText = text }
+            if parent.selectionSnapshot != snapshot { parent.selectionSnapshot = snapshot }
+        }
+
+        func applyViewportTarget(_ target: PDFViewportTarget?) {
+            guard let target, target.token != lastViewportToken else { return }
+            lastViewportToken = target.token
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let view = self.view else { return }
+                self.isRestoring = true
+                if self.lastPageIndex != target.pageIndex,
+                   let page = view.document?.page(at: target.pageIndex) {
+                    view.go(to: page)
+                    self.lastPageIndex = target.pageIndex
+                }
+                self.restoreScrollOffset(target.scrollOffset)
+                self.isRestoring = false
+            }
         }
 
         func applyHighlight(_ target: PDFHighlightTarget?) {
@@ -258,22 +323,42 @@ extension PDFKitView {
                   target.token != lastHighlightToken,
                   let view,
                   let document = view.document else { return }
-            let matches = document.findString(
-                target.query,
-                withOptions: [.caseInsensitive, .diacriticInsensitive]
-            )
-            .filter { selection in
-                selection.pages.contains(where: { document.index(for: $0) == target.pageIndex })
+            let selections: [PDFSelection]
+            if !target.rects.isEmpty {
+                selections = target.rects.compactMap { anchor in
+                    guard let page = document.page(at: anchor.pageIndex) else { return nil }
+                    let pageBounds = page.bounds(for: .cropBox)
+                    let rect = CGRect(
+                        x: pageBounds.minX + CGFloat(anchor.x) * pageBounds.width,
+                        y: pageBounds.minY + CGFloat(anchor.y) * pageBounds.height,
+                        width: CGFloat(anchor.width) * pageBounds.width,
+                        height: CGFloat(anchor.height) * pageBounds.height
+                    )
+                    return page.selection(for: rect)
+                }
+            } else if let query = target.query {
+                let matches = document.findString(
+                    query,
+                    withOptions: [.caseInsensitive, .diacriticInsensitive]
+                )
+                .filter { selection in
+                    selection.pages.contains(where: {
+                        document.index(for: $0) == target.pageIndex
+                    })
+                }
+                let occurrence = target.occurrenceIndex ?? 0
+                selections = matches.indices.contains(occurrence) ? [matches[occurrence]] : []
+            } else {
+                selections = []
             }
-            guard matches.indices.contains(target.occurrenceIndex) else { return }
-            let selection = matches[target.occurrenceIndex]
+            guard let selection = selections.first else { return }
             lastHighlightToken = target.token
             #if os(macOS)
-            selection.color = NSColor.systemYellow.withAlphaComponent(0.58)
+            selections.forEach { $0.color = NSColor.systemYellow.withAlphaComponent(0.58) }
             #else
-            selection.color = UIColor.systemYellow.withAlphaComponent(0.58)
+            selections.forEach { $0.color = UIColor.systemYellow.withAlphaComponent(0.58) }
             #endif
-            view.highlightedSelections = [selection]
+            view.highlightedSelections = selections
             view.go(to: selection)
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(2.5))
@@ -295,7 +380,7 @@ extension PDFKitView {
                 object: contentView,
                 queue: .main
             ) { [weak self] _ in
-                Task { @MainActor in self?.syncState() }
+                Task { @MainActor in self?.scheduleStateSync() }
             })
         }
 
@@ -332,7 +417,7 @@ extension PDFKitView {
             }
             scrollObservation = scrollView.observe(\.contentOffset, options: [.new]) {
                 [weak self] _, _ in
-                Task { @MainActor in self?.syncState() }
+                Task { @MainActor in self?.scheduleStateSync() }
             }
             updateHorizontalScrollAllowance(parent.horizontalScrollAllowance)
         }

@@ -5,7 +5,7 @@ import json
 import time
 from contextlib import asynccontextmanager
 from itertools import count
-from typing import Annotated
+from typing import Annotated, Literal
 
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
@@ -117,6 +117,29 @@ class MessageRequest(BaseModel):
 
 class StarRequest(BaseModel):
     starred: bool
+
+
+class SelectionRectRequest(BaseModel):
+    page_index: int = Field(ge=0)
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    width: float = Field(gt=0, le=1)
+    height: float = Field(gt=0, le=1)
+
+
+class BookmarkRequest(BaseModel):
+    kind: Literal["page", "selection"]
+    page_index: int = Field(ge=0)
+    scroll_offset: float = Field(default=0, ge=0)
+    selected_text: str | None = Field(default=None, max_length=20000)
+    selection_rects: list[SelectionRectRequest] = Field(default_factory=list, max_length=100)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class PageViewRequest(BaseModel):
+    page_index: int = Field(ge=0)
+    active_seconds: float = Field(gt=0, le=90)
+    new_visit: bool = False
 
 
 @app.get("/health")
@@ -343,6 +366,143 @@ def set_paper_star(
         else:
             conn.execute("DELETE FROM paper_stars WHERE paper_id = ?", (paper_id,))
     return {"starred": payload.starred}
+
+
+@app.get("/api/papers/{paper_id}/bookmarks")
+def list_bookmarks(paper_id: str, _: Session, settings: SettingsDependency):
+    with connect(settings.resolved_database_path) as conn:
+        if not conn.execute("SELECT 1 FROM papers WHERE id = ?", (paper_id,)).fetchone():
+            raise HTTPException(404, "Paper not found")
+        bookmark_rows = conn.execute(
+            "SELECT * FROM bookmarks WHERE paper_id = ? ORDER BY page_index, created_at",
+            (paper_id,),
+        ).fetchall()
+        suggestion_rows = conn.execute(
+            """
+            SELECT v.page_index, v.total_active_seconds, v.visit_count, v.last_viewed_at
+            FROM page_views v
+            WHERE v.paper_id = ?
+              AND (v.total_active_seconds >= 45 OR v.visit_count >= 3)
+              AND NOT EXISTS (
+                SELECT 1 FROM bookmarks b
+                WHERE b.paper_id = v.paper_id AND b.page_index = v.page_index
+                  AND b.kind = 'page'
+              )
+            ORDER BY v.total_active_seconds DESC, v.last_viewed_at DESC
+            LIMIT 5
+            """,
+            (paper_id,),
+        ).fetchall()
+    return {
+        "bookmarks": [as_dict(row) for row in bookmark_rows],
+        "suggestions": [dict(row) for row in suggestion_rows],
+    }
+
+
+@app.post("/api/papers/{paper_id}/bookmarks", status_code=201)
+def create_bookmark(
+    paper_id: str,
+    payload: BookmarkRequest,
+    _: Session,
+    settings: SettingsDependency,
+):
+    if payload.kind == "selection" and (
+        not (payload.selected_text or "").strip() or not payload.selection_rects
+    ):
+        raise HTTPException(422, "Selection bookmarks require text and coordinates")
+    timestamp = now()
+    with connect(settings.resolved_database_path) as conn:
+        if not conn.execute("SELECT 1 FROM papers WHERE id = ?", (paper_id,)).fetchone():
+            raise HTTPException(404, "Paper not found")
+        if payload.kind == "page":
+            existing = conn.execute(
+                "SELECT id FROM bookmarks WHERE paper_id = ? AND page_index = ? AND kind = 'page'",
+                (paper_id, payload.page_index),
+            ).fetchone()
+            bookmark_id = existing["id"] if existing else new_id()
+            conn.execute(
+                """
+                INSERT INTO bookmarks (
+                  id, paper_id, kind, page_index, scroll_offset, selected_text,
+                  selection_rects_json, note, created_at, updated_at
+                ) VALUES (?, ?, 'page', ?, ?, NULL, '[]', ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET scroll_offset=excluded.scroll_offset,
+                  note=COALESCE(excluded.note, bookmarks.note), updated_at=excluded.updated_at
+                """,
+                (
+                    bookmark_id,
+                    paper_id,
+                    payload.page_index,
+                    payload.scroll_offset,
+                    payload.note,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        else:
+            bookmark_id = new_id()
+            conn.execute(
+                """
+                INSERT INTO bookmarks (
+                  id, paper_id, kind, page_index, scroll_offset, selected_text,
+                  selection_rects_json, note, created_at, updated_at
+                ) VALUES (?, ?, 'selection', ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    bookmark_id,
+                    paper_id,
+                    payload.page_index,
+                    payload.scroll_offset,
+                    payload.selected_text,
+                    json.dumps([rect.model_dump() for rect in payload.selection_rects]),
+                    payload.note,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        row = conn.execute("SELECT * FROM bookmarks WHERE id = ?", (bookmark_id,)).fetchone()
+    return as_dict(row)
+
+
+@app.delete("/api/bookmarks/{bookmark_id}", status_code=204)
+def delete_bookmark(bookmark_id: str, _: Session, settings: SettingsDependency):
+    with connect(settings.resolved_database_path) as conn:
+        deleted = conn.execute("DELETE FROM bookmarks WHERE id = ?", (bookmark_id,))
+        if deleted.rowcount != 1:
+            raise HTTPException(404, "Bookmark not found")
+    return Response(status_code=204)
+
+
+@app.post("/api/papers/{paper_id}/page-views")
+def record_page_view(
+    paper_id: str,
+    payload: PageViewRequest,
+    _: Session,
+    settings: SettingsDependency,
+):
+    timestamp = now()
+    with connect(settings.resolved_database_path) as conn:
+        if not conn.execute("SELECT 1 FROM papers WHERE id = ?", (paper_id,)).fetchone():
+            raise HTTPException(404, "Paper not found")
+        conn.execute(
+            """
+            INSERT INTO page_views (
+              paper_id, page_index, total_active_seconds, visit_count, last_viewed_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(paper_id, page_index) DO UPDATE SET
+              total_active_seconds=page_views.total_active_seconds + excluded.total_active_seconds,
+              visit_count=page_views.visit_count + excluded.visit_count,
+              last_viewed_at=excluded.last_viewed_at
+            """,
+            (
+                paper_id,
+                payload.page_index,
+                payload.active_seconds,
+                int(payload.new_visit),
+                timestamp,
+            ),
+        )
+    return {"updated_at": timestamp}
 
 
 @app.get("/api/chats")

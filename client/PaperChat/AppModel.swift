@@ -34,9 +34,18 @@ final class AppModel: ObservableObject {
 
     private var client = APIClient(baseURL: URL(string: "http://localhost:8001/")!)
     private var saveTasks: [String: Task<Void, Never>] = [:]
+    private var pageViewTasks: [String: Task<Void, Never>] = [:]
+    private var pageViewTrackers: [String: PageViewTracker] = [:]
     private var searchGeneration = UUID()
     private let searchPageSize = 40
     private var searchNextOffset = 0
+
+    private struct PageViewTracker {
+        var pageIndex: Int
+        var checkpoint: Date
+        var lastActivity: Date
+        var newVisitPending: Bool
+    }
 
     var activeSession: PaperSession? {
         guard case let .paper(id) = route else { return nil }
@@ -89,6 +98,9 @@ final class AppModel: ObservableObject {
         KeychainStore.delete(account: "tokens")
         saveTasks.values.forEach { $0.cancel() }
         saveTasks = [:]
+        pageViewTasks.values.forEach { $0.cancel() }
+        pageViewTasks = [:]
+        pageViewTrackers = [:]
         isAuthenticated = false
         recentPapers = []
         starredPapers = []
@@ -146,9 +158,16 @@ final class AppModel: ObservableObject {
     }
 
     func navigate(to destination: WorkspaceRoute, fromSidebar: Bool = false) {
+        if destination != route, let session = activeSession {
+            stopPageViewTracking(session)
+        }
         if fromSidebar {
             navigationHistory = []
             route = destination
+            if case let .paper(id) = destination,
+               let session = openSessions.first(where: { $0.id == id }) {
+                startPageViewTracking(session)
+            }
             if destination == .search {
                 searchFocusToken = UUID()
             }
@@ -157,6 +176,10 @@ final class AppModel: ObservableObject {
         guard destination != route else { return }
         navigationHistory.append(route)
         route = destination
+        if case let .paper(id) = destination,
+           let session = openSessions.first(where: { $0.id == id }) {
+            startPageViewTracking(session)
+        }
         if destination == .search {
             searchFocusToken = UUID()
         }
@@ -164,7 +187,14 @@ final class AppModel: ObservableObject {
 
     func goBack() {
         guard let destination = navigationHistory.popLast() else { return }
+        if let session = activeSession {
+            stopPageViewTracking(session)
+        }
         route = destination
+        if case let .paper(id) = destination,
+           let session = openSessions.first(where: { $0.id == id }) {
+            startPageViewTracking(session)
+        }
     }
 
     func prepareSearch(for query: String) {
@@ -270,12 +300,15 @@ final class AppModel: ObservableObject {
             let paper = try await client.resolve(attachmentKey: key)
             let session = try await openPaper(paper, fromSidebar: false)
             if let matchedPage = searchResult.matchedPage ?? searchResult.pageStart {
-                session.pageIndex = max(0, matchedPage - 1)
+                let pageIndex = max(0, matchedPage - 1)
+                recordPageActivity(in: session, pageIndex: pageIndex)
+                session.pageIndex = pageIndex
                 session.pdfHighlightTarget = PDFHighlightTarget(
                     token: UUID(),
                     query: searchResult.highlightQuery ?? searchQuery,
                     pageIndex: session.pageIndex,
-                    occurrenceIndex: 0
+                    occurrenceIndex: 0,
+                    rects: []
                 )
             }
         }
@@ -327,6 +360,10 @@ final class AppModel: ObservableObject {
         let detail = try await client.paper(id: paper.id)
         let session = PaperSession(paper: detail)
         session.threads = try await client.threads(paperID: detail.id)
+        if let overview = try? await client.bookmarks(paperID: detail.id) {
+            session.bookmarks = overview.bookmarks
+            session.bookmarkSuggestions = overview.suggestions
+        }
         if let activeID = detail.readingState?.activeThreadID,
            let active = session.threads.first(where: { $0.id == activeID }) {
             try await selectThread(active, in: session)
@@ -382,12 +419,114 @@ final class AppModel: ObservableObject {
     }
 
     func presentChat(in session: PaperSession) {
+        session.sidebarMode = .chat
         if session.threads.isEmpty {
             beginNewChat(in: session)
         } else if session.selectedThread == nil {
             session.chatRoute = .list
         }
         session.isChatPresented = true
+    }
+
+    func presentBookmarks(in session: PaperSession) {
+        session.sidebarMode = .bookmarks
+        session.isChatPresented = true
+        Task { await loadBookmarks(in: session) }
+    }
+
+    func loadBookmarks(in session: PaperSession) async {
+        do {
+            let overview = try await client.bookmarks(paperID: session.id)
+            session.bookmarks = overview.bookmarks
+            session.bookmarkSuggestions = overview.suggestions
+        } catch {
+            guard !Self.isCancellation(error) else { return }
+            report(error)
+        }
+    }
+
+    func addPageBookmark(in session: PaperSession, pageIndex: Int? = nil) async {
+        do {
+            let targetPage = pageIndex ?? session.pageIndex
+            let bookmark = try await client.createBookmark(
+                paperID: session.id,
+                kind: .page,
+                pageIndex: targetPage,
+                scrollOffset: targetPage == session.pageIndex ? session.scrollOffset : 0,
+                selectedText: nil,
+                selectionRects: []
+            )
+            session.bookmarks.removeAll(where: { $0.id == bookmark.id })
+            session.bookmarks.append(bookmark)
+            sortBookmarks(in: session)
+            session.bookmarkSuggestions.removeAll(where: { $0.pageIndex == targetPage })
+        } catch {
+            report(error)
+        }
+    }
+
+    func addSelectionBookmark(in session: PaperSession) async {
+        guard let selection = session.selectionSnapshot, !selection.rects.isEmpty else { return }
+        do {
+            let pageIndex = selection.rects.first?.pageIndex ?? session.pageIndex
+            let bookmark = try await client.createBookmark(
+                paperID: session.id,
+                kind: .selection,
+                pageIndex: pageIndex,
+                scrollOffset: session.scrollOffset,
+                selectedText: selection.text,
+                selectionRects: selection.rects
+            )
+            session.bookmarks.append(bookmark)
+            sortBookmarks(in: session)
+        } catch {
+            report(error)
+        }
+    }
+
+    func deleteBookmark(_ bookmark: PaperBookmark, in session: PaperSession) async {
+        do {
+            try await client.deleteBookmark(id: bookmark.id)
+            session.bookmarks.removeAll(where: { $0.id == bookmark.id })
+            await loadBookmarks(in: session)
+        } catch {
+            report(error)
+        }
+    }
+
+    func openBookmark(_ bookmark: PaperBookmark, in session: PaperSession) {
+        session.pageIndex = bookmark.pageIndex
+        session.scrollOffset = bookmark.scrollOffset
+        session.pdfViewportTarget = PDFViewportTarget(
+            token: UUID(),
+            pageIndex: bookmark.pageIndex,
+            scrollOffset: bookmark.scrollOffset
+        )
+        if bookmark.kind == .selection, !bookmark.selectionRects.isEmpty {
+            session.pdfHighlightTarget = PDFHighlightTarget(
+                token: UUID(),
+                query: bookmark.selectedText,
+                pageIndex: bookmark.pageIndex,
+                occurrenceIndex: nil,
+                rects: bookmark.selectionRects
+            )
+        } else {
+            session.pdfHighlightTarget = nil
+        }
+        recordPageActivity(in: session, pageIndex: bookmark.pageIndex)
+    }
+
+    func openSuggestion(_ suggestion: BookmarkSuggestion, in session: PaperSession) {
+        session.pdfViewportTarget = nil
+        session.pageIndex = suggestion.pageIndex
+        session.pdfHighlightTarget = nil
+        recordPageActivity(in: session, pageIndex: suggestion.pageIndex)
+    }
+
+    private func sortBookmarks(in session: PaperSession) {
+        session.bookmarks.sort {
+            ($0.pageIndex, $0.createdAt) < ($1.pageIndex, $1.createdAt)
+        }
     }
 
     func showChatList(_ session: PaperSession) {
@@ -457,6 +596,7 @@ final class AppModel: ObservableObject {
         guard isAuthenticated else { return }
         await refreshLibrary()
         guard let session = activeSession else { return }
+        startPageViewTracking(session)
         do {
             let threads = try await client.threads(paperID: session.id)
             session.threads = threads
@@ -471,6 +611,11 @@ final class AppModel: ObservableObject {
         if session.isChatPresented, session.chatRoute == .conversation {
             await refreshConversation(in: session)
         }
+    }
+
+    func appDidResignActive() {
+        guard let session = activeSession else { return }
+        stopPageViewTracking(session)
     }
 
     func send(in session: PaperSession) async {
@@ -618,17 +763,22 @@ final class AppModel: ObservableObject {
     }
 
     func selectPDFSearchResult(_ result: PDFSearchResult, in session: PaperSession) {
+        session.pdfViewportTarget = nil
+        recordPageActivity(in: session, pageIndex: result.pageIndex)
         session.pageIndex = result.pageIndex
         session.pdfHighlightTarget = PDFHighlightTarget(
             token: UUID(),
             query: session.pdfSearchQuery,
             pageIndex: result.pageIndex,
-            occurrenceIndex: result.occurrenceIndex
+            occurrenceIndex: result.occurrenceIndex,
+            rects: []
         )
     }
 
     func pageChanged(_ index: Int, in session: PaperSession) {
         guard session.pageIndex != index else { return }
+        session.pdfViewportTarget = nil
+        recordPageActivity(in: session, pageIndex: index)
         session.pageIndex = index
         scheduleReadingStateSave(session)
     }
@@ -639,6 +789,7 @@ final class AppModel: ObservableObject {
         zoomScale: Double,
         scrollOffset: Double
     ) {
+        recordPageActivity(in: session, pageIndex: pageIndex)
         session.pageIndex = pageIndex
         session.zoomScale = zoomScale
         session.scrollOffset = scrollOffset
@@ -663,6 +814,79 @@ final class AppModel: ObservableObject {
             displayMode: "singlePageContinuous",
             activeThreadID: session.selectedThread?.id
         )
+    }
+
+    private func startPageViewTracking(_ session: PaperSession) {
+        recordPageActivity(in: session, pageIndex: session.pageIndex)
+        guard pageViewTasks[session.id] == nil else { return }
+        pageViewTasks[session.id] = Task { [weak self, weak session] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled, let self, let session else { return }
+                self.checkpointPageView(session, at: Date())
+            }
+        }
+    }
+
+    private func stopPageViewTracking(_ session: PaperSession) {
+        checkpointPageView(session, at: Date())
+        pageViewTasks[session.id]?.cancel()
+        pageViewTasks[session.id] = nil
+        pageViewTrackers[session.id] = nil
+    }
+
+    private func recordPageActivity(in session: PaperSession, pageIndex: Int) {
+        let current = Date()
+        guard var tracker = pageViewTrackers[session.id] else {
+            pageViewTrackers[session.id] = PageViewTracker(
+                pageIndex: pageIndex,
+                checkpoint: current,
+                lastActivity: current,
+                newVisitPending: true
+            )
+            return
+        }
+        if tracker.pageIndex != pageIndex {
+            checkpointPageView(session, at: current)
+            pageViewTrackers[session.id] = PageViewTracker(
+                pageIndex: pageIndex,
+                checkpoint: current,
+                lastActivity: current,
+                newVisitPending: true
+            )
+            return
+        }
+        if current.timeIntervalSince(tracker.lastActivity) > 90 {
+            checkpointPageView(session, at: tracker.lastActivity.addingTimeInterval(90))
+            tracker.checkpoint = current
+            tracker.newVisitPending = true
+        }
+        tracker.lastActivity = current
+        pageViewTrackers[session.id] = tracker
+    }
+
+    private func checkpointPageView(_ session: PaperSession, at current: Date) {
+        guard var tracker = pageViewTrackers[session.id] else { return }
+        let eligibleEnd = min(current, tracker.lastActivity.addingTimeInterval(90))
+        let seconds = eligibleEnd.timeIntervalSince(tracker.checkpoint)
+        guard seconds >= 1 else { return }
+        let pageIndex = tracker.pageIndex
+        let newVisit = tracker.newVisitPending
+        tracker.checkpoint = eligibleEnd
+        tracker.newVisitPending = false
+        pageViewTrackers[session.id] = tracker
+        Task { [weak self, weak session] in
+            guard let self, let session else { return }
+            try? await client.recordPageView(
+                paperID: session.id,
+                pageIndex: pageIndex,
+                activeSeconds: min(seconds, 90),
+                newVisit: newVisit
+            )
+            if session.sidebarMode == .bookmarks, session.isChatPresented {
+                await self.loadBookmarks(in: session)
+            }
+        }
     }
 
     private func perform(_ operation: () async throws -> Void) async {

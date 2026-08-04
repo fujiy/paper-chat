@@ -275,6 +275,74 @@ def test_library_starred_and_chat_overview(tmp_path, monkeypatch):
     assert chats.json()[0]["paper_title"] == "Test Paper"
 
 
+def test_bookmarks_selection_anchors_and_reading_suggestions(tmp_path, monkeypatch):
+    with client_for(tmp_path, monkeypatch) as client:
+        headers = {"Authorization": f"Bearer {register(client)['access_token']}"}
+        paper = client.post(
+            "/api/papers/resolve", json={"attachment_key": "ATT1"}, headers=headers
+        ).json()
+        base = f"/api/papers/{paper['id']}"
+
+        viewed = client.post(
+            f"{base}/page-views",
+            json={"page_index": 2, "active_seconds": 50, "new_visit": True},
+            headers=headers,
+        )
+        suggested = client.get(f"{base}/bookmarks", headers=headers).json()
+
+        page_bookmark = client.post(
+            f"{base}/bookmarks",
+            json={"kind": "page", "page_index": 2, "scroll_offset": 120.5},
+            headers=headers,
+        )
+        updated_page_bookmark = client.post(
+            f"{base}/bookmarks",
+            json={"kind": "page", "page_index": 2, "scroll_offset": 200},
+            headers=headers,
+        )
+        selection_bookmark = client.post(
+            f"{base}/bookmarks",
+            json={
+                "kind": "selection",
+                "page_index": 3,
+                "selected_text": "A selected result",
+                "selection_rects": [
+                    {
+                        "page_index": 3,
+                        "x": 0.1,
+                        "y": 0.2,
+                        "width": 0.5,
+                        "height": 0.08,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        after_add = client.get(f"{base}/bookmarks", headers=headers).json()
+        deleted = client.delete(
+            f"/api/bookmarks/{page_bookmark.json()['id']}", headers=headers
+        )
+        after_delete = client.get(f"{base}/bookmarks", headers=headers).json()
+        invalid_selection = client.post(
+            f"{base}/bookmarks",
+            json={"kind": "selection", "page_index": 1, "selected_text": "missing anchor"},
+            headers=headers,
+        )
+
+    assert viewed.status_code == 200
+    assert suggested["suggestions"][0]["page_index"] == 2
+    assert page_bookmark.status_code == 201
+    assert updated_page_bookmark.json()["id"] == page_bookmark.json()["id"]
+    assert updated_page_bookmark.json()["scroll_offset"] == 200
+    assert selection_bookmark.status_code == 201
+    assert selection_bookmark.json()["selection_rects"][0]["page_index"] == 3
+    assert len(after_add["bookmarks"]) == 2
+    assert after_add["suggestions"] == []
+    assert deleted.status_code == 204
+    assert after_delete["suggestions"][0]["page_index"] == 2
+    assert invalid_selection.status_code == 422
+
+
 def test_library_search_supports_pagination(tmp_path, monkeypatch):
     with client_for(tmp_path, monkeypatch) as client:
         headers = {"Authorization": f"Bearer {register(client)['access_token']}"}

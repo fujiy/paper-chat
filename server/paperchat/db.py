@@ -51,10 +51,30 @@ CREATE TABLE IF NOT EXISTS paper_stars (
   paper_id TEXT PRIMARY KEY, starred_at TEXT NOT NULL,
   FOREIGN KEY(paper_id) REFERENCES papers(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS bookmarks (
+  id TEXT PRIMARY KEY, paper_id TEXT NOT NULL, kind TEXT NOT NULL,
+  page_index INTEGER NOT NULL, scroll_offset REAL NOT NULL DEFAULT 0,
+  selected_text TEXT, selection_rects_json TEXT NOT NULL DEFAULT '[]',
+  note TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  FOREIGN KEY(paper_id) REFERENCES papers(id) ON DELETE CASCADE,
+  CHECK(kind IN ('page', 'selection'))
+);
+CREATE TABLE IF NOT EXISTS page_views (
+  paper_id TEXT NOT NULL, page_index INTEGER NOT NULL,
+  total_active_seconds REAL NOT NULL DEFAULT 0,
+  visit_count INTEGER NOT NULL DEFAULT 0, last_viewed_at TEXT NOT NULL,
+  PRIMARY KEY(paper_id, page_index),
+  FOREIGN KEY(paper_id) REFERENCES papers(id) ON DELETE CASCADE
+);
 CREATE INDEX IF NOT EXISTS idx_papers_recent ON papers(last_opened_at DESC);
 CREATE INDEX IF NOT EXISTS idx_threads_paper ON threads(paper_id, last_used_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_paper_stars_at ON paper_stars(starred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_paper ON bookmarks(paper_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bookmarks_page_unique
+  ON bookmarks(paper_id, page_index) WHERE kind = 'page';
+CREATE INDEX IF NOT EXISTS idx_page_views_suggestions
+  ON page_views(paper_id, total_active_seconds DESC);
 """
 
 

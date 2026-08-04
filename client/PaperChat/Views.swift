@@ -283,6 +283,18 @@ struct WorkspaceDetail: View {
                             session.isPDFSearchPresented.toggle()
                         }
                     }
+                    Menu("Add Bookmark", systemImage: "bookmark") {
+                        if session.selectionSnapshot != nil {
+                            Button("Selected Text", systemImage: "text.quote") {
+                                model.presentBookmarks(in: session)
+                                Task { await model.addSelectionBookmark(in: session) }
+                            }
+                        }
+                        Button("Current Page", systemImage: "doc") {
+                            model.presentBookmarks(in: session)
+                            Task { await model.addPageBookmark(in: session) }
+                        }
+                    }
                     if let itemKey = session.paper.identifiers?
                         .first(where: { $0.kind == "zotero_item" })?.value,
                        let url = URL(string: "zotero://select/library/items/\(itemKey)") {
@@ -296,12 +308,14 @@ struct WorkspaceDetail: View {
                         .help("Open in Zotero")
                     }
                     Button(
-                        session.isChatPresented ? "Hide Chat" : "Show Chat",
+                        session.isChatPresented ? "Hide Sidebar" : "Show Sidebar",
                         systemImage: "sidebar.right"
                     ) {
                         withAnimation(.snappy(duration: 0.22)) {
                             if session.isChatPresented {
                                 session.isChatPresented = false
+                            } else if session.sidebarMode == .bookmarks {
+                                model.presentBookmarks(in: session)
                             } else {
                                 model.presentChat(in: session)
                             }
@@ -349,6 +363,18 @@ private struct WorkspaceShortcuts: View {
                 model.navigate(to: .search)
             }
             .keyboardShortcut("f", modifiers: [.command, .shift])
+
+            Button("Add Bookmark") {
+                guard let session = model.activeSession else { return }
+                model.presentBookmarks(in: session)
+                if session.selectionSnapshot != nil {
+                    Task { await model.addSelectionBookmark(in: session) }
+                } else {
+                    Task { await model.addPageBookmark(in: session) }
+                }
+            }
+            .keyboardShortcut("d", modifiers: .command)
+            .disabled(model.activeSession == nil)
         }
         .frame(width: 1, height: 1)
         .opacity(0.001)
@@ -1034,7 +1060,9 @@ struct PDFPane: View {
                             }
                         ),
                         selectedText: $session.selectedText,
+                        selectionSnapshot: $session.selectionSnapshot,
                         highlightTarget: session.pdfHighlightTarget,
+                        viewportTarget: session.pdfViewportTarget,
                         isImmersive: isImmersive,
                         horizontalScrollAllowance: horizontalScrollAllowance
                     ) {
@@ -1142,38 +1170,218 @@ struct PDFSearchPanel: View {
 }
 
 struct ChatPane: View {
+    @EnvironmentObject private var model: AppModel
     @ObservedObject var session: PaperSession
 
     var body: some View {
         VStack(spacing: 0) {
-            if session.agentTextAvailability == .unavailable {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                    Text(
-                        "No OCR or indexed text is available for this paper. "
-                            + "The agent cannot read it unless you include a PDF selection."
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(Color.orange.opacity(0.09))
-                Divider()
+            Picker("Sidebar", selection: sidebarModeBinding) {
+                Label("Chat", systemImage: "bubble.left.and.bubble.right")
+                    .tag(PaperSidebarMode.chat)
+                Label("Bookmarks", systemImage: "bookmark")
+                    .tag(PaperSidebarMode.bookmarks)
             }
+            .pickerStyle(.segmented)
+            .labelStyle(.titleAndIcon)
+            .labelsHidden()
+            .padding(.horizontal, 12)
+            .frame(height: 48)
+            Divider()
 
             Group {
-                switch session.chatRoute {
-                case .list:
-                    ChatListView(session: session)
-                case .conversation, .compose:
-                    ConversationView(session: session)
+                switch session.sidebarMode {
+                case .chat:
+                    VStack(spacing: 0) {
+                        if session.agentTextAvailability == .unavailable {
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange)
+                                Text(
+                                    "No OCR or indexed text is available for this paper. "
+                                        + "The agent cannot read it unless you include a PDF selection."
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 9)
+                            .background(Color.orange.opacity(0.09))
+                            Divider()
+                        }
+                        switch session.chatRoute {
+                        case .list:
+                            ChatListView(session: session)
+                        case .conversation, .compose:
+                            ConversationView(session: session)
+                        }
+                    }
+                case .bookmarks:
+                    BookmarksView(session: session)
                 }
             }
         }
         .background(Color.platformBackground)
+    }
+
+    private var sidebarModeBinding: Binding<PaperSidebarMode> {
+        Binding(
+            get: { session.sidebarMode },
+            set: { mode in
+                guard mode != session.sidebarMode else { return }
+                DispatchQueue.main.async {
+                    session.sidebarMode = mode
+                    if mode == .bookmarks {
+                        Task { await model.loadBookmarks(in: session) }
+                    }
+                }
+            }
+        )
+    }
+}
+
+struct BookmarksView: View {
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject var session: PaperSession
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Bookmarks").font(.headline)
+                Spacer()
+                Menu("Add Bookmark", systemImage: "plus") {
+                    if session.selectionSnapshot != nil {
+                        Button("Selected Text", systemImage: "text.quote") {
+                            Task { await model.addSelectionBookmark(in: session) }
+                        }
+                    }
+                    Button("Current Page", systemImage: "doc") {
+                        Task { await model.addPageBookmark(in: session) }
+                    }
+                }
+                .labelStyle(.iconOnly)
+                .help("Add bookmark")
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 48)
+            Divider()
+
+            if session.bookmarks.isEmpty, session.bookmarkSuggestions.isEmpty {
+                ContentUnavailableView(
+                    "No Bookmarks Yet",
+                    systemImage: "bookmark",
+                    description: Text("Bookmark the current page or selected text.")
+                )
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        if !session.bookmarks.isEmpty {
+                            bookmarkSection
+                        }
+                        if !session.bookmarkSuggestions.isEmpty {
+                            suggestionSection
+                        }
+                    }
+                    .padding(12)
+                }
+            }
+        }
+    }
+
+    private var bookmarkSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("SAVED")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+            ForEach(session.bookmarks) { bookmark in
+                Button {
+                    model.openBookmark(bookmark, in: session)
+                } label: {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: bookmark.kind == .selection ? "text.quote" : "bookmark.fill")
+                            .foregroundStyle(.tint)
+                            .frame(width: 20)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(bookmarkTitle(bookmark))
+                                .font(.callout.weight(.medium))
+                                .lineLimit(bookmark.kind == .selection ? 2 : 1)
+                            Text("Page \(bookmark.pageIndex + 1)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(9)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(.quaternary.opacity(0.42), in: RoundedRectangle(cornerRadius: 9))
+                .contextMenu {
+                    Button("Delete Bookmark", systemImage: "trash", role: .destructive) {
+                        Task { await model.deleteBookmark(bookmark, in: session) }
+                    }
+                }
+            }
+        }
+    }
+
+    private var suggestionSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("SUGGESTED FROM READING")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+            ForEach(session.bookmarkSuggestions) { suggestion in
+                HStack(spacing: 8) {
+                    Button {
+                        model.openSuggestion(suggestion, in: session)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "clock")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Page \(suggestion.pageIndex + 1)")
+                                    .font(.callout.weight(.medium))
+                                Text(viewingDuration(suggestion.totalActiveSeconds))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    Button("Add Page Bookmark", systemImage: "plus") {
+                        Task {
+                            await model.addPageBookmark(
+                                in: session,
+                                pageIndex: suggestion.pageIndex
+                            )
+                        }
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                }
+                .padding(9)
+                .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 9))
+            }
+        }
+    }
+
+    private func bookmarkTitle(_ bookmark: PaperBookmark) -> String {
+        if let text = bookmark.selectedText?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+            return text.replacingOccurrences(of: "\n", with: " ")
+        }
+        return "Page \(bookmark.pageIndex + 1)"
+    }
+
+    private func viewingDuration(_ seconds: Double) -> String {
+        let minutes = max(1, Int(seconds / 60))
+        return minutes == 1 ? "Viewed for about 1 minute" : "Viewed for about \(minutes) minutes"
     }
 }
 

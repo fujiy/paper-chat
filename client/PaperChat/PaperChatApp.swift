@@ -28,8 +28,11 @@ struct PaperChatWindow: View {
             .environmentObject(model)
             .task { await model.restoreSession() }
             .onChange(of: scenePhase) { _, phase in
-                guard phase == .active else { return }
-                Task { await model.appDidBecomeActive() }
+                if phase == .active {
+                    Task { await model.appDidBecomeActive() }
+                } else {
+                    model.appDidResignActive()
+                }
             }
     }
 }

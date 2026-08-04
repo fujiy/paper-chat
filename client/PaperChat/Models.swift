@@ -184,6 +184,61 @@ struct PageReference: Codable, Hashable, Sendable {
     let pageIndex: Int
 }
 
+enum BookmarkKind: String, Codable, Hashable, Sendable {
+    case page
+    case selection
+}
+
+enum PaperSidebarMode: String, CaseIterable, Hashable, Sendable {
+    case chat
+    case bookmarks
+}
+
+struct BookmarkSelectionRect: Codable, Hashable, Sendable {
+    let pageIndex: Int
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+}
+
+struct PDFSelectionSnapshot: Equatable, Sendable {
+    let text: String
+    let rects: [BookmarkSelectionRect]
+}
+
+struct PaperBookmark: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let paperID: String
+    let kind: BookmarkKind
+    let pageIndex: Int
+    let scrollOffset: Double
+    let selectedText: String?
+    let selectionRects: [BookmarkSelectionRect]
+    let note: String?
+    let createdAt: String
+    let updatedAt: String
+
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, pageIndex, scrollOffset, selectedText, selectionRects
+        case note, createdAt, updatedAt
+        case paperID = "paperId"
+    }
+}
+
+struct BookmarkSuggestion: Codable, Identifiable, Hashable, Sendable {
+    var id: Int { pageIndex }
+    let pageIndex: Int
+    let totalActiveSeconds: Double
+    let visitCount: Int
+    let lastViewedAt: String
+}
+
+struct BookmarkOverview: Codable, Sendable {
+    let bookmarks: [PaperBookmark]
+    let suggestions: [BookmarkSuggestion]
+}
+
 struct LibrarySearchResponse: Codable, Sendable {
     let papers: [LibrarySearchPaper]
     let hasMore: Bool?
@@ -319,9 +374,16 @@ struct PDFSearchResult: Identifiable, Hashable, Sendable {
 
 struct PDFHighlightTarget: Equatable, Sendable {
     let token: UUID
-    let query: String
+    let query: String?
     let pageIndex: Int
-    let occurrenceIndex: Int
+    let occurrenceIndex: Int?
+    let rects: [BookmarkSelectionRect]
+}
+
+struct PDFViewportTarget: Equatable, Sendable {
+    let token: UUID
+    let pageIndex: Int
+    let scrollOffset: Double
 }
 
 @MainActor
@@ -333,6 +395,7 @@ final class PaperSession: ObservableObject, Identifiable {
     @Published var zoomScale: Double
     @Published var scrollOffset: Double
     @Published var selectedText: String?
+    @Published var selectionSnapshot: PDFSelectionSnapshot?
     @Published var draft = ""
     @Published var threads: [ChatThread] = []
     @Published var selectedThread: ChatThread?
@@ -340,12 +403,16 @@ final class PaperSession: ObservableObject, Identifiable {
     @Published var streamingMessage: StreamingChatMessage?
     @Published var agentTextAvailability: AgentTextAvailability = .checking
     @Published var isChatPresented = false
+    @Published var sidebarMode: PaperSidebarMode = .chat
     @Published var chatRoute: ChatRoute = .list
     @Published var chatWidth: CGFloat = 390
+    @Published var bookmarks: [PaperBookmark] = []
+    @Published var bookmarkSuggestions: [BookmarkSuggestion] = []
     @Published var isPDFSearchPresented = false
     @Published var pdfSearchQuery = ""
     @Published var pdfSearchResults: [PDFSearchResult] = []
     @Published var pdfHighlightTarget: PDFHighlightTarget?
+    @Published var pdfViewportTarget: PDFViewportTarget?
 
     init(paper: Paper) {
         id = paper.id

@@ -93,6 +93,53 @@ actor APIClient {
         return response.starred
     }
 
+    func bookmarks(paperID: String) async throws -> BookmarkOverview {
+        try await request("api/papers/\(paperID)/bookmarks")
+    }
+
+    func createBookmark(
+        paperID: String,
+        kind: BookmarkKind,
+        pageIndex: Int,
+        scrollOffset: Double,
+        selectedText: String?,
+        selectionRects: [BookmarkSelectionRect]
+    ) async throws -> PaperBookmark {
+        try await request(
+            "api/papers/\(paperID)/bookmarks",
+            method: "POST",
+            body: BookmarkCreateBody(
+                kind: kind,
+                pageIndex: pageIndex,
+                scrollOffset: max(0, scrollOffset),
+                selectedText: selectedText,
+                selectionRects: selectionRects
+            )
+        )
+    }
+
+    func deleteBookmark(id: String) async throws {
+        let request = try authorizedRequest("api/bookmarks/\(id)", method: "DELETE")
+        let (data, response) = try await data(for: request, authenticated: true)
+        try validate(response: response, data: data)
+    }
+
+    func recordPageView(
+        paperID: String,
+        pageIndex: Int,
+        activeSeconds: Double,
+        newVisit: Bool
+    ) async throws {
+        let body: [String: AnyEncodable] = [
+            "page_index": AnyEncodable(pageIndex),
+            "active_seconds": AnyEncodable(activeSeconds),
+            "new_visit": AnyEncodable(newVisit),
+        ]
+        let _: UpdatedAt = try await request(
+            "api/papers/\(paperID)/page-views", method: "POST", body: body
+        )
+    }
+
     func threads(paperID: String) async throws -> [ChatThread] {
         try await request("api/papers/\(paperID)/threads")
     }
@@ -409,6 +456,14 @@ actor APIClient {
 }
 
 private struct UpdatedAt: Decodable { let updatedAt: String }
+
+private struct BookmarkCreateBody: Encodable {
+    let kind: BookmarkKind
+    let pageIndex: Int
+    let scrollOffset: Double
+    let selectedText: String?
+    let selectionRects: [BookmarkSelectionRect]
+}
 
 enum APIError: LocalizedError {
     case invalidURL, invalidResponse, unauthorized, http(Int), server(Int, String), decoding(String)
