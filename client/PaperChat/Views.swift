@@ -1026,6 +1026,20 @@ struct PDFPane: View {
     @ObservedObject var session: PaperSession
     @Binding var isImmersive: Bool
     let horizontalScrollAllowance: CGFloat
+    @State private var thumbnailsAreCompact = false
+    @State private var pdfViewportRange = PDFViewportRange.full
+    @State private var thumbnailInteractionToken = UUID()
+    @State private var suppressThumbnailCompactionUntil = Date.distantPast
+
+    private let thumbnailOverlayInset: CGFloat = 100
+
+    private var presentsCompactThumbnails: Bool {
+        #if os(macOS)
+        false
+        #else
+        thumbnailsAreCompact
+        #endif
+    }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -1059,17 +1073,27 @@ struct PDFPane: View {
                                 )
                             }
                         ),
+                        viewportRange: $pdfViewportRange,
                         selectedText: $session.selectedText,
                         selectionSnapshot: $session.selectionSnapshot,
                         highlightTarget: session.pdfHighlightTarget,
                         viewportTarget: session.pdfViewportTarget,
                         isImmersive: isImmersive,
-                        horizontalScrollAllowance: horizontalScrollAllowance
-                    ) {
-                        withAnimation(.smooth(duration: 0.28)) {
-                            isImmersive.toggle()
+                        horizontalScrollAllowance: horizontalScrollAllowance,
+                        bottomOverlayInset: thumbnailOverlayInset,
+                        thumbnailInteractionToken: thumbnailInteractionToken,
+                        onCompactPresentationChange: { shouldCompact in
+                            #if !os(macOS)
+                            if shouldCompact, Date.now < suppressThumbnailCompactionUntil {
+                                return
+                            }
+                            guard thumbnailsAreCompact != shouldCompact else { return }
+                            withAnimation(.smooth(duration: 0.24)) {
+                                thumbnailsAreCompact = shouldCompact
+                            }
+                            #endif
                         }
-                    }
+                    )
                 } else {
                     ProgressView("Downloading PDF…")
                 }
@@ -1081,17 +1105,36 @@ struct PDFPane: View {
                     .padding(10)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
+
         }
-        .safeAreaInset(edge: .bottom) {
+        .overlay(alignment: .bottom) {
             if !isImmersive, let url = session.pdfURL {
                 PDFThumbnailStrip(
                     url: url,
                     pageIndex: Binding(
                         get: { session.pageIndex },
                         set: { model.pageChanged($0, in: session) }
-                    )
+                    ),
+                    isCompact: presentsCompactThumbnails,
+                    viewportRange: pdfViewportRange,
+                    onInteractionBegan: {
+                        #if !os(macOS)
+                        suppressThumbnailCompactionUntil = Date.now.addingTimeInterval(1)
+                        thumbnailInteractionToken = UUID()
+                        #endif
+                    },
+                    onSelectPage: { page in
+                        model.pageChanged(page, in: session)
+                    },
+                    onTapPage: {
+                        #if !os(macOS)
+                        withAnimation(.smooth(duration: 0.24)) {
+                            thumbnailsAreCompact = false
+                        }
+                        #endif
+                    }
                 )
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .transition(.opacity)
             }
         }
         .animation(.smooth(duration: 0.28), value: isImmersive)

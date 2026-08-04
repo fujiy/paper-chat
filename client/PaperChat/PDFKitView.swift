@@ -1,19 +1,29 @@
 import PDFKit
 import SwiftUI
 
+struct PDFViewportRange: Equatable {
+    var lowerBound: CGFloat
+    var upperBound: CGFloat
+
+    static let full = PDFViewportRange(lowerBound: 0, upperBound: 1)
+}
+
 #if os(macOS)
 struct PDFKitView: NSViewRepresentable {
     let url: URL
     @Binding var pageIndex: Int
     @Binding var zoomScale: Double
     @Binding var scrollOffset: Double
+    @Binding var viewportRange: PDFViewportRange
     @Binding var selectedText: String?
     @Binding var selectionSnapshot: PDFSelectionSnapshot?
     let highlightTarget: PDFHighlightTarget?
     let viewportTarget: PDFViewportTarget?
     let isImmersive: Bool
     let horizontalScrollAllowance: CGFloat
-    let onTap: () -> Void
+    let bottomOverlayInset: CGFloat
+    let thumbnailInteractionToken: UUID
+    let onCompactPresentationChange: (Bool) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -34,13 +44,16 @@ struct PDFKitView: UIViewRepresentable {
     @Binding var pageIndex: Int
     @Binding var zoomScale: Double
     @Binding var scrollOffset: Double
+    @Binding var viewportRange: PDFViewportRange
     @Binding var selectedText: String?
     @Binding var selectionSnapshot: PDFSelectionSnapshot?
     let highlightTarget: PDFHighlightTarget?
     let viewportTarget: PDFViewportTarget?
     let isImmersive: Bool
     let horizontalScrollAllowance: CGFloat
-    let onTap: () -> Void
+    let bottomOverlayInset: CGFloat
+    let thumbnailInteractionToken: UUID
+    let onCompactPresentationChange: (Bool) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -65,6 +78,7 @@ extension PDFKitView {
         view.autoScales = false
         coordinator.observe(view)
         coordinator.lastImmersive = isImmersive
+        coordinator.lastThumbnailInteractionToken = thumbnailInteractionToken
         loadDocument(in: view, coordinator: coordinator)
     }
 
@@ -92,7 +106,11 @@ extension PDFKitView {
         }
         coordinator.applyHighlight(highlightTarget)
         coordinator.applyViewportTarget(viewportTarget)
-        coordinator.updateHorizontalScrollAllowance(horizontalScrollAllowance)
+        coordinator.updateContentInsets(
+            horizontalScrollAllowance: horizontalScrollAllowance,
+            bottomOverlayInset: bottomOverlayInset
+        )
+        coordinator.handleThumbnailInteraction(thumbnailInteractionToken)
         if immersiveChanged {
             coordinator.restoreViewportAfterLayout(scrollOffset)
         }
@@ -154,10 +172,15 @@ extension PDFKitView {
         var lastViewportToken: UUID?
         var lastImmersive: Bool?
         var lastHorizontalScrollAllowance: CGFloat = -1
-        var viewportOffsetBeforeToggle: CGPoint?
+        var lastBottomOverlayInset: CGFloat = -1
+        var lastThumbnailInteractionToken: UUID?
         nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
         #if !os(macOS)
         private var scrollObservation: NSKeyValueObservation?
+        private var lastObservedVerticalOffset: CGFloat?
+        private var accumulatedVerticalDelta: CGFloat = 0
+        private var lastVerticalDirection: CGFloat = 0
+        private var suppressCompactPresentationUntil = Date.distantPast
         #endif
 
         init(_ parent: PDFKitView) {
@@ -166,16 +189,6 @@ extension PDFKitView {
 
         func observe(_ view: PDFView) {
             self.view = view
-            #if os(macOS)
-            let tap = NSClickGestureRecognizer(target: self, action: #selector(handleTap))
-            tap.numberOfClicksRequired = 1
-            #else
-            let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
-            tap.numberOfTapsRequired = 1
-            tap.cancelsTouchesInView = false
-            #endif
-            tap.delegate = self
-            view.addGestureRecognizer(tap)
             observers.append(NotificationCenter.default.addObserver(
                 forName: .PDFViewPageChanged, object: view, queue: .main
             ) { [weak self] _ in
@@ -194,40 +207,56 @@ extension PDFKitView {
             observeScrolling()
         }
 
-        func updateHorizontalScrollAllowance(_ allowance: CGFloat) {
+        func updateContentInsets(
+            horizontalScrollAllowance: CGFloat,
+            bottomOverlayInset: CGFloat
+        ) {
             #if os(macOS)
             guard let scrollView = view?.documentView?.enclosingScrollView else { return }
-            guard abs(lastHorizontalScrollAllowance - allowance) > 0.5 else { return }
-            lastHorizontalScrollAllowance = allowance
+            guard abs(lastHorizontalScrollAllowance - horizontalScrollAllowance) > 0.5
+                    || abs(lastBottomOverlayInset - bottomOverlayInset) > 0.5 else { return }
+            lastHorizontalScrollAllowance = horizontalScrollAllowance
+            lastBottomOverlayInset = bottomOverlayInset
             scrollView.hasHorizontalScroller = true
             scrollView.horizontalScrollElasticity = .automatic
             var insets = scrollView.contentInsets
-            insets.right = allowance
+            insets.right = horizontalScrollAllowance
+            insets.bottom = bottomOverlayInset
             scrollView.contentInsets = insets
             #else
             guard let scrollView = view?.descendantScrollView else { return }
-            guard abs(lastHorizontalScrollAllowance - allowance) > 0.5 else { return }
-            lastHorizontalScrollAllowance = allowance
+            guard abs(lastHorizontalScrollAllowance - horizontalScrollAllowance) > 0.5
+                    || abs(lastBottomOverlayInset - bottomOverlayInset) > 0.5 else { return }
+            lastHorizontalScrollAllowance = horizontalScrollAllowance
+            lastBottomOverlayInset = bottomOverlayInset
             scrollView.alwaysBounceHorizontal = true
             var contentInset = scrollView.contentInset
-            contentInset.right = allowance
+            contentInset.right = horizontalScrollAllowance
+            contentInset.bottom = bottomOverlayInset
             scrollView.contentInset = contentInset
-            var indicatorInset = scrollView.horizontalScrollIndicatorInsets
-            indicatorInset.right = allowance
-            scrollView.horizontalScrollIndicatorInsets = indicatorInset
+            var horizontalIndicatorInset = scrollView.horizontalScrollIndicatorInsets
+            horizontalIndicatorInset.right = horizontalScrollAllowance
+            scrollView.horizontalScrollIndicatorInsets = horizontalIndicatorInset
+            var verticalIndicatorInset = scrollView.verticalScrollIndicatorInsets
+            verticalIndicatorInset.bottom = bottomOverlayInset
+            scrollView.verticalScrollIndicatorInsets = verticalIndicatorInset
             #endif
         }
 
-        @objc private func handleTap() {
-            viewportOffsetBeforeToggle = currentViewportOffset()
-            parent.onTap()
+        func handleThumbnailInteraction(_ token: UUID) {
+            guard lastThumbnailInteractionToken != token else { return }
+            lastThumbnailInteractionToken = token
+            #if !os(macOS)
+            suppressCompactPresentationUntil = Date.now.addingTimeInterval(1)
+            resetAccumulatedScrollIntent()
+            guard let scrollView = view?.descendantScrollView else { return }
+            scrollView.setContentOffset(scrollView.contentOffset, animated: false)
+            #endif
         }
 
         func restoreViewportAfterLayout(_ fallbackVerticalOffset: Double) {
             guard let view else { return }
-            let offset = viewportOffsetBeforeToggle
-                ?? CGPoint(x: currentViewportOffset().x, y: fallbackVerticalOffset)
-            viewportOffsetBeforeToggle = nil
+            let offset = CGPoint(x: currentViewportOffset().x, y: fallbackVerticalOffset)
             DispatchQueue.main.async { [weak self, weak view] in
                 guard let self, let view else { return }
                 self.isRestoring = true
@@ -243,8 +272,11 @@ extension PDFKitView {
 
         func syncState() {
             guard !isRestoring, let view,
-                  let page = view.currentPage,
                   let document = view.document else { return }
+            let viewportCenter = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+            guard let page = view.page(for: viewportCenter, nearest: true) ?? view.currentPage else {
+                return
+            }
             let pageIndex = document.index(for: page)
             let scale = view.scaleFactor
             let offset = currentScrollOffset()
@@ -253,6 +285,25 @@ extension PDFKitView {
             if parent.pageIndex != pageIndex { parent.pageIndex = pageIndex }
             if abs(parent.zoomScale - scale) > 0.005 { parent.zoomScale = scale }
             if abs(parent.scrollOffset - offset) > 0.5 { parent.scrollOffset = offset }
+            syncViewportRange()
+        }
+
+        private func syncViewportRange() {
+            #if !os(macOS)
+            guard let scrollView = view?.descendantScrollView else { return }
+            let contentHeight = scrollView.contentSize.height
+            guard contentHeight > 0 else { return }
+            let visibleStart = scrollView.contentOffset.y + scrollView.adjustedContentInset.top
+            let visibleEnd = visibleStart + scrollView.bounds.height
+            let range = PDFViewportRange(
+                lowerBound: min(max(visibleStart / contentHeight, 0), 1),
+                upperBound: min(max(visibleEnd / contentHeight, 0), 1)
+            )
+            if abs(parent.viewportRange.lowerBound - range.lowerBound) > 0.0001
+                || abs(parent.viewportRange.upperBound - range.upperBound) > 0.0001 {
+                parent.viewportRange = range
+            }
+            #endif
         }
 
         private func scheduleStateSync() {
@@ -374,7 +425,10 @@ extension PDFKitView {
                 return
             }
             contentView.postsBoundsChangedNotifications = true
-            updateHorizontalScrollAllowance(parent.horizontalScrollAllowance)
+            updateContentInsets(
+                horizontalScrollAllowance: parent.horizontalScrollAllowance,
+                bottomOverlayInset: parent.bottomOverlayInset
+            )
             observers.append(NotificationCenter.default.addObserver(
                 forName: NSView.boundsDidChangeNotification,
                 object: contentView,
@@ -416,10 +470,69 @@ extension PDFKitView {
                 return
             }
             scrollObservation = scrollView.observe(\.contentOffset, options: [.new]) {
-                [weak self] _, _ in
-                Task { @MainActor in self?.scheduleStateSync() }
+                [weak self, weak scrollView] _, _ in
+                Task { @MainActor in
+                    guard let scrollView else { return }
+                    self?.handleObservedScroll(in: scrollView)
+                    self?.syncState()
+                }
             }
-            updateHorizontalScrollAllowance(parent.horizontalScrollAllowance)
+            lastObservedVerticalOffset = scrollView.contentOffset.y
+            updateContentInsets(
+                horizontalScrollAllowance: parent.horizontalScrollAllowance,
+                bottomOverlayInset: parent.bottomOverlayInset
+            )
+        }
+
+        private func handleObservedScroll(in scrollView: UIScrollView) {
+            let verticalOffset = scrollView.contentOffset.y
+            guard let previousOffset = lastObservedVerticalOffset else {
+                lastObservedVerticalOffset = verticalOffset
+                return
+            }
+            lastObservedVerticalOffset = verticalOffset
+
+            guard !isRestoring, scrollView.isDragging || scrollView.isDecelerating else {
+                resetAccumulatedScrollIntent()
+                return
+            }
+            guard Date.now >= suppressCompactPresentationUntil else {
+                resetAccumulatedScrollIntent()
+                return
+            }
+
+            let topOffset = -scrollView.adjustedContentInset.top
+            if verticalOffset <= topOffset + 2 {
+                requestCompactPresentation(false)
+                resetAccumulatedScrollIntent()
+                return
+            }
+
+            let delta = verticalOffset - previousOffset
+            guard abs(delta) > 0.25 else { return }
+            let direction: CGFloat = delta > 0 ? 1 : -1
+            if direction != lastVerticalDirection {
+                accumulatedVerticalDelta = 0
+                lastVerticalDirection = direction
+            }
+            accumulatedVerticalDelta += delta
+
+            if accumulatedVerticalDelta >= 28 {
+                requestCompactPresentation(true)
+                resetAccumulatedScrollIntent()
+            } else if accumulatedVerticalDelta <= -92 {
+                requestCompactPresentation(false)
+                resetAccumulatedScrollIntent()
+            }
+        }
+
+        private func requestCompactPresentation(_ isCompact: Bool) {
+            parent.onCompactPresentationChange(isCompact)
+        }
+
+        private func resetAccumulatedScrollIntent() {
+            accumulatedVerticalDelta = 0
+            lastVerticalDirection = 0
         }
 
         private func currentScrollOffset() -> Double {
@@ -448,72 +561,147 @@ extension PDFKitView {
     }
 }
 
-#if os(macOS)
-extension PDFKitView.Coordinator: NSGestureRecognizerDelegate {
-    func gestureRecognizer(
-        _ gestureRecognizer: NSGestureRecognizer,
-        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: NSGestureRecognizer
-    ) -> Bool {
-        true
-    }
-}
-#else
-extension PDFKitView.Coordinator: UIGestureRecognizerDelegate {
-    func gestureRecognizer(
-        _ gestureRecognizer: UIGestureRecognizer,
-        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
-    ) -> Bool {
-        true
-    }
-}
-#endif
-
 struct PDFThumbnailStrip: View {
     let url: URL
     @Binding var pageIndex: Int
+    let isCompact: Bool
+    let viewportRange: PDFViewportRange
+    let onInteractionBegan: () -> Void
+    let onSelectPage: (Int) -> Void
+    let onTapPage: () -> Void
     @State private var document: PDFDocument?
 
     var body: some View {
-        GeometryReader { geometry in
-            ScrollViewReader { proxy in
-                ScrollView(.horizontal) {
-                    LazyHStack(spacing: 8) {
-                        if let document {
-                            ForEach(0..<document.pageCount, id: \.self) { index in
-                                Button {
-                                    pageIndex = index
-                                } label: {
-                                    PDFPageThumbnail(
-                                        document: document,
-                                        pageIndex: index,
-                                        isSelected: pageIndex == index
-                                    )
+        Group {
+            if isCompact {
+                PDFPagePositionTrack(
+                    pageIndex: pageIndex,
+                    pageCount: document?.pageCount ?? 0,
+                    viewportRange: viewportRange,
+                    onInteractionBegan: onInteractionBegan,
+                    onSelectPage: onSelectPage,
+                    onTapPage: onTapPage
+                )
+                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityLabel("Show page thumbnails")
+                .accessibilityValue(pagePositionAccessibilityValue)
+            } else {
+                GeometryReader { geometry in
+                    ScrollViewReader { proxy in
+                        ScrollView(.horizontal) {
+                            LazyHStack(spacing: 8) {
+                                if let document {
+                                    ForEach(0..<document.pageCount, id: \.self) { index in
+                                        Button {
+                                            pageIndex = index
+                                        } label: {
+                                            PDFPageThumbnail(
+                                                document: document,
+                                                pageIndex: index,
+                                                isSelected: pageIndex == index
+                                            )
+                                        }
+                                        .buttonStyle(.plain)
+                                        .id(index)
+                                    }
                                 }
-                                .buttonStyle(.plain)
-                                .id(index)
+                            }
+                            .frame(
+                                minWidth: max(geometry.size.width - 20, 0),
+                                alignment: .center
+                            )
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                        }
+                        .scrollIndicators(.hidden)
+                        .onAppear {
+                            proxy.scrollTo(pageIndex, anchor: .center)
+                        }
+                        .onChange(of: pageIndex) { _, page in
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                proxy.scrollTo(page, anchor: .center)
                             }
                         }
-                    }
-                    .frame(minWidth: max(geometry.size.width - 20, 0), alignment: .center)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                }
-                .scrollIndicators(.hidden)
-                .background(.bar)
-                .onAppear {
-                    proxy.scrollTo(pageIndex, anchor: .center)
-                }
-                .onChange(of: pageIndex) { _, page in
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        proxy.scrollTo(page, anchor: .center)
                     }
                 }
             }
         }
-        .frame(height: 92)
+        .frame(height: isCompact ? 26 : 92)
+        .background(.bar)
+        .animation(.smooth(duration: 0.24), value: isCompact)
         .task(id: url) {
             document = PDFDocument(url: url)
         }
+    }
+
+    private var pagePositionAccessibilityValue: String {
+        guard let pageCount = document?.pageCount, pageCount > 0 else { return "" }
+        return "Page \(min(pageIndex + 1, pageCount)) of \(pageCount)"
+    }
+}
+
+private struct PDFPagePositionTrack: View {
+    let pageIndex: Int
+    let pageCount: Int
+    let viewportRange: PDFViewportRange
+    let onInteractionBegan: () -> Void
+    let onSelectPage: (Int) -> Void
+    let onTapPage: () -> Void
+    @State private var isInteracting = false
+
+    var body: some View {
+        GeometryReader { geometry in
+            let width = max(geometry.size.width, 0)
+            let lowerBound = min(max(viewportRange.lowerBound, 0), 1)
+            let upperBound = min(max(viewportRange.upperBound, lowerBound), 1)
+            let exactIndicatorWidth = width * (upperBound - lowerBound)
+            let indicatorWidth = min(width, max(6, exactIndicatorWidth))
+            let indicatorOffset = min(
+                max(width * lowerBound, 0),
+                max(width - indicatorWidth, 0)
+            )
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.secondary.opacity(0.28))
+                    .frame(height: 2)
+                Capsule()
+                    .fill(Color.accentColor)
+                    .frame(width: indicatorWidth, height: 4)
+                    .offset(x: indicatorOffset)
+            }
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        if !isInteracting {
+                            isInteracting = true
+                            onInteractionBegan()
+                        }
+                        selectPage(at: value.location.x, trackWidth: width)
+                    }
+                    .onEnded { value in
+                        selectPage(at: value.location.x, trackWidth: width)
+                        let isTap = hypot(value.translation.width, value.translation.height) < 8
+                        isInteracting = false
+                        if isTap {
+                            onTapPage()
+                        }
+                    }
+            )
+        }
+    }
+
+    private func selectPage(at x: CGFloat, trackWidth: CGFloat) {
+        guard pageCount > 0, trackWidth > 0 else { return }
+        let progress = min(max(x / trackWidth, 0), 1)
+        let page = pageCount == 1
+            ? 0
+            : Int((progress * CGFloat(pageCount - 1)).rounded())
+        guard page != pageIndex else { return }
+        onSelectPage(page)
     }
 }
 
