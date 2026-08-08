@@ -20,7 +20,7 @@ struct PDFKitView: NSViewRepresentable {
     let highlightTarget: PDFHighlightTarget?
     let viewportTarget: PDFViewportTarget?
     let isImmersive: Bool
-    let horizontalScrollAllowance: CGFloat
+    let isInspectorPresented: Bool
     let bottomOverlayInset: CGFloat
     let thumbnailInteractionToken: UUID
     let onCompactPresentationChange: (Bool) -> Void
@@ -50,7 +50,7 @@ struct PDFKitView: UIViewRepresentable {
     let highlightTarget: PDFHighlightTarget?
     let viewportTarget: PDFViewportTarget?
     let isImmersive: Bool
-    let horizontalScrollAllowance: CGFloat
+    let isInspectorPresented: Bool
     let bottomOverlayInset: CGFloat
     let thumbnailInteractionToken: UUID
     let onCompactPresentationChange: (Bool) -> Void
@@ -78,13 +78,16 @@ extension PDFKitView {
         view.autoScales = false
         coordinator.observe(view)
         coordinator.lastImmersive = isImmersive
+        coordinator.lastInspectorPresented = isInspectorPresented
         coordinator.lastThumbnailInteractionToken = thumbnailInteractionToken
         loadDocument(in: view, coordinator: coordinator)
     }
 
     func update(_ view: PDFView, coordinator: Coordinator) {
         let immersiveChanged = coordinator.lastImmersive != isImmersive
+        let inspectorChanged = coordinator.lastInspectorPresented != isInspectorPresented
         coordinator.lastImmersive = isImmersive
+        coordinator.lastInspectorPresented = isInspectorPresented
         if view.document?.documentURL != url {
             loadDocument(in: view, coordinator: coordinator)
             return
@@ -106,12 +109,9 @@ extension PDFKitView {
         }
         coordinator.applyHighlight(highlightTarget)
         coordinator.applyViewportTarget(viewportTarget)
-        coordinator.updateContentInsets(
-            horizontalScrollAllowance: horizontalScrollAllowance,
-            bottomOverlayInset: bottomOverlayInset
-        )
+        coordinator.updateContentInsets(bottomOverlayInset: bottomOverlayInset)
         coordinator.handleThumbnailInteraction(thumbnailInteractionToken)
-        if immersiveChanged {
+        if immersiveChanged || inspectorChanged {
             coordinator.restoreViewportAfterLayout(scrollOffset)
         }
     }
@@ -171,7 +171,7 @@ extension PDFKitView {
         var lastHighlightToken: UUID?
         var lastViewportToken: UUID?
         var lastImmersive: Bool?
-        var lastHorizontalScrollAllowance: CGFloat = -1
+        var lastInspectorPresented: Bool?
         var lastBottomOverlayInset: CGFloat = -1
         var lastThumbnailInteractionToken: UUID?
         nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
@@ -207,35 +207,25 @@ extension PDFKitView {
             observeScrolling()
         }
 
-        func updateContentInsets(
-            horizontalScrollAllowance: CGFloat,
-            bottomOverlayInset: CGFloat
-        ) {
+        func updateContentInsets(bottomOverlayInset: CGFloat) {
             #if os(macOS)
             guard let scrollView = view?.documentView?.enclosingScrollView else { return }
-            guard abs(lastHorizontalScrollAllowance - horizontalScrollAllowance) > 0.5
-                    || abs(lastBottomOverlayInset - bottomOverlayInset) > 0.5 else { return }
-            lastHorizontalScrollAllowance = horizontalScrollAllowance
+            guard abs(lastBottomOverlayInset - bottomOverlayInset) > 0.5 else { return }
             lastBottomOverlayInset = bottomOverlayInset
-            scrollView.hasHorizontalScroller = true
-            scrollView.horizontalScrollElasticity = .automatic
             var insets = scrollView.contentInsets
-            insets.right = horizontalScrollAllowance
+            insets.right = 0
             insets.bottom = bottomOverlayInset
             scrollView.contentInsets = insets
             #else
             guard let scrollView = view?.descendantScrollView else { return }
-            guard abs(lastHorizontalScrollAllowance - horizontalScrollAllowance) > 0.5
-                    || abs(lastBottomOverlayInset - bottomOverlayInset) > 0.5 else { return }
-            lastHorizontalScrollAllowance = horizontalScrollAllowance
+            guard abs(lastBottomOverlayInset - bottomOverlayInset) > 0.5 else { return }
             lastBottomOverlayInset = bottomOverlayInset
-            scrollView.alwaysBounceHorizontal = true
             var contentInset = scrollView.contentInset
-            contentInset.right = horizontalScrollAllowance
+            contentInset.right = 0
             contentInset.bottom = bottomOverlayInset
             scrollView.contentInset = contentInset
             var horizontalIndicatorInset = scrollView.horizontalScrollIndicatorInsets
-            horizontalIndicatorInset.right = horizontalScrollAllowance
+            horizontalIndicatorInset.right = 0
             scrollView.horizontalScrollIndicatorInsets = horizontalIndicatorInset
             var verticalIndicatorInset = scrollView.verticalScrollIndicatorInsets
             verticalIndicatorInset.bottom = bottomOverlayInset
@@ -425,10 +415,7 @@ extension PDFKitView {
                 return
             }
             contentView.postsBoundsChangedNotifications = true
-            updateContentInsets(
-                horizontalScrollAllowance: parent.horizontalScrollAllowance,
-                bottomOverlayInset: parent.bottomOverlayInset
-            )
+            updateContentInsets(bottomOverlayInset: parent.bottomOverlayInset)
             observers.append(NotificationCenter.default.addObserver(
                 forName: NSView.boundsDidChangeNotification,
                 object: contentView,
@@ -478,10 +465,7 @@ extension PDFKitView {
                 }
             }
             lastObservedVerticalOffset = scrollView.contentOffset.y
-            updateContentInsets(
-                horizontalScrollAllowance: parent.horizontalScrollAllowance,
-                bottomOverlayInset: parent.bottomOverlayInset
-            )
+            updateContentInsets(bottomOverlayInset: parent.bottomOverlayInset)
         }
 
         private func handleObservedScroll(in scrollView: UIScrollView) {

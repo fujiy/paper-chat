@@ -405,7 +405,6 @@ final class PaperSession: ObservableObject, Identifiable {
     @Published var isChatPresented = false
     @Published var sidebarMode: PaperSidebarMode = .chat
     @Published var chatRoute: ChatRoute = .list
-    @Published var chatWidth: CGFloat = 390
     @Published var bookmarks: [PaperBookmark] = []
     @Published var bookmarkSuggestions: [BookmarkSuggestion] = []
     @Published var isPDFSearchPresented = false

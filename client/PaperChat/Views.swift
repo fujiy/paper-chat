@@ -76,7 +76,10 @@ struct LibraryWorkspace: View {
             LibrarySidebar()
                 .navigationSplitViewColumnWidth(min: 170, ideal: 225, max: 300)
         } detail: {
-            WorkspaceDetail(isPDFImmersive: $isPDFImmersive)
+            WorkspaceDetail(
+                columnVisibility: $columnVisibility,
+                isPDFImmersive: $isPDFImmersive
+            )
         }
         .navigationSplitViewStyle(.prominentDetail)
         .onChange(of: isPDFImmersive) { _, isImmersive in
@@ -215,7 +218,9 @@ struct SidebarButton: View {
 struct WorkspaceDetail: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.openURL) private var openURL
+    @Binding var columnVisibility: NavigationSplitViewVisibility
     @Binding var isPDFImmersive: Bool
+    @State private var showsPDFSidebarFallback = false
 
     var body: some View {
         ZStack {
@@ -247,11 +252,16 @@ struct WorkspaceDetail: View {
             }
 
             ForEach(model.openSessions) { session in
-                ReaderWorkspace(session: session, isImmersive: $isPDFImmersive)
-                    .opacity(model.route == .paper(session.id) ? 1 : 0)
-                    .allowsHitTesting(model.route == .paper(session.id))
-                    .accessibilityHidden(model.route != .paper(session.id))
-                    .zIndex(model.route == .paper(session.id) ? 2 : 0)
+                let isActive = model.route == .paper(session.id)
+                ReaderWorkspace(
+                    session: session,
+                    isActive: isActive,
+                    isImmersive: $isPDFImmersive
+                )
+                .opacity(isActive ? 1 : 0)
+                .allowsHitTesting(isActive)
+                .accessibilityHidden(!isActive)
+                .zIndex(isActive ? 2 : 0)
             }
         }
         .navigationTitle(navigationTitle)
@@ -262,8 +272,21 @@ struct WorkspaceDetail: View {
             WorkspaceShortcuts()
         }
         .toolbar {
+            #if !os(macOS)
+            if showsPDFSidebarFallback {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Show Sidebar", systemImage: "sidebar.left") {
+                        withAnimation(.snappy) {
+                            showsPDFSidebarFallback = false
+                            columnVisibility = columnVisibility == .all ? .detailOnly : .all
+                        }
+                    }
+                    .labelStyle(.iconOnly)
+                }
+            }
+            #endif
             if !model.navigationHistory.isEmpty {
-                ToolbarItem(placement: .navigation) {
+                ToolbarItem(placement: backButtonPlacement) {
                     Button("Back", systemImage: "chevron.left") {
                         model.goBack()
                     }
@@ -308,7 +331,7 @@ struct WorkspaceDetail: View {
                         .help("Open in Zotero")
                     }
                     Button(
-                        session.isChatPresented ? "Hide Sidebar" : "Show Sidebar",
+                        session.isChatPresented ? "Hide Inspector" : "Show Inspector",
                         systemImage: "sidebar.right"
                     ) {
                         withAnimation(.snappy(duration: 0.22)) {
@@ -324,6 +347,33 @@ struct WorkspaceDetail: View {
                 }
             }
         }
+        .onChange(of: model.route, initial: true) { previousRoute, route in
+            #if !os(macOS)
+            if case .paper = route {
+                showsPDFSidebarFallback = columnVisibility != .all
+            } else if case .paper = previousRoute {
+                // Keep the fallback state from the PDF screen. If the sidebar was
+                // opened there, the system toggle has already restored itself.
+            } else {
+                showsPDFSidebarFallback = false
+            }
+            #endif
+        }
+        .onChange(of: columnVisibility) { _, visibility in
+            #if !os(macOS)
+            if visibility == .all {
+                showsPDFSidebarFallback = false
+            }
+            #endif
+        }
+    }
+
+    private var backButtonPlacement: ToolbarItemPlacement {
+        #if os(macOS)
+        .navigation
+        #else
+        .topBarLeading
+        #endif
     }
 
     private var navigationTitle: String {
@@ -876,147 +926,41 @@ struct ChatsPage: View {
 
 struct ReaderWorkspace: View {
     @ObservedObject var session: PaperSession
+    let isActive: Bool
     @Binding var isImmersive: Bool
 
+    @ViewBuilder
     var body: some View {
-        GeometryReader { geometry in
-            ReaderLayout(
-                session: session,
-                availableWidth: geometry.size.width,
-                isImmersive: $isImmersive
-            )
-        }
-    }
-}
-
-struct ReaderLayout: View {
-    @ObservedObject var session: PaperSession
-    let availableWidth: CGFloat
-    @Binding var isImmersive: Bool
-
-    private var usesOverlayChat: Bool { availableWidth < 820 }
-    private var presentedChatWidth: CGFloat {
-        guard !isImmersive, session.isChatPresented else { return 0 }
-        if usesOverlayChat {
-            return min(max(availableWidth * 0.88, 300), 430)
-        }
-        return min(session.chatWidth, availableWidth * 0.48)
-    }
-
-    var body: some View {
-        ZStack(alignment: .trailing) {
-            PDFPane(
-                session: session,
-                isImmersive: $isImmersive,
-                horizontalScrollAllowance: presentedChatWidth
-            )
-
-            if !isImmersive, session.isChatPresented {
-                if usesOverlayChat {
-                    Color.black.opacity(0.12)
-                        .ignoresSafeArea()
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            withAnimation(.snappy) { session.isChatPresented = false }
-                        }
+        if isActive {
+            pdfPane
+                .inspector(isPresented: inspectorPresented) {
                     ChatPane(session: session)
-                        .frame(width: min(max(availableWidth * 0.88, 300), 430))
-                        .background(.regularMaterial)
-                        .shadow(color: .black.opacity(0.2), radius: 18, x: -5)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                } else {
-                    ResizableChatSidebar(session: session, totalWidth: availableWidth)
-                    .background(.regularMaterial)
-                    .shadow(color: .black.opacity(0.16), radius: 14, x: -4)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                        .inspectorColumnWidth(min: 320, ideal: 390, max: 520)
+                        #if os(iOS)
+                        .presentationDetents([.medium, .large])
+                        .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+                        #endif
                 }
+        } else {
+            pdfPane
+        }
+    }
+
+    private var pdfPane: some View {
+        PDFPane(
+            session: session,
+            isImmersive: $isImmersive,
+            isInspectorPresented: isActive && !isImmersive && session.isChatPresented
+        )
+    }
+
+    private var inspectorPresented: Binding<Bool> {
+        Binding(
+            get: { isActive && !isImmersive && session.isChatPresented },
+            set: { isPresented in
+                guard isActive else { return }
+                session.isChatPresented = isPresented
             }
-        }
-        .clipped()
-    }
-}
-
-private struct ResizableChatSidebar: View {
-    @ObservedObject var session: PaperSession
-    let totalWidth: CGFloat
-    @State private var transientWidth: CGFloat?
-
-    private var maximumWidth: CGFloat { totalWidth * 0.48 }
-    private var committedWidth: CGFloat {
-        min(max(session.chatWidth, 300), maximumWidth)
-    }
-    private var displayedWidth: CGFloat { transientWidth ?? committedWidth }
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ChatResizeHandle(
-                initialWidth: displayedWidth,
-                totalWidth: totalWidth,
-                onChanged: { transientWidth = $0 },
-                onEnded: { width in
-                    if abs(session.chatWidth - width) > 0.5 {
-                        session.chatWidth = width
-                    }
-                    transientWidth = nil
-                }
-            )
-            .zIndex(10)
-            ChatPane(session: session)
-                .frame(width: displayedWidth)
-        }
-    }
-}
-
-struct ChatResizeHandle: View {
-    let initialWidth: CGFloat
-    let totalWidth: CGFloat
-    let onChanged: (CGFloat) -> Void
-    let onEnded: (CGFloat) -> Void
-    @State private var dragOrigin: DragOrigin?
-    @State private var latestWidth: CGFloat?
-
-    private struct DragOrigin {
-        let sidebarWidth: CGFloat
-        let pointerX: CGFloat
-    }
-
-    var body: some View {
-        ZStack {
-            Color.clear
-            Capsule()
-                .fill(.secondary.opacity(0.38))
-                .frame(width: 3, height: 42)
-        }
-        .frame(width: 18)
-        .contentShape(Rectangle())
-        .onHover { hovering in
-            #if os(macOS)
-            if hovering { NSCursor.resizeLeftRight.push() }
-            else { NSCursor.pop() }
-            #endif
-        }
-        .gesture(
-            DragGesture(minimumDistance: 0, coordinateSpace: .global)
-                .onChanged { value in
-                    if dragOrigin == nil {
-                        dragOrigin = DragOrigin(
-                            sidebarWidth: initialWidth,
-                            pointerX: value.startLocation.x
-                        )
-                    }
-                    guard let dragOrigin else { return }
-                    let proposed = dragOrigin.sidebarWidth
-                        + dragOrigin.pointerX
-                        - value.location.x
-                    let width = min(max(proposed, 300), totalWidth * 0.48)
-                    latestWidth = width
-                    onChanged(width)
-                }
-                .onEnded { _ in
-                    onEnded(latestWidth ?? initialWidth)
-                    latestWidth = nil
-                    dragOrigin = nil
-                }
         )
     }
 }
@@ -1025,7 +969,7 @@ struct PDFPane: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var session: PaperSession
     @Binding var isImmersive: Bool
-    let horizontalScrollAllowance: CGFloat
+    let isInspectorPresented: Bool
     @State private var thumbnailsAreCompact = false
     @State private var pdfViewportRange = PDFViewportRange.full
     @State private var thumbnailInteractionToken = UUID()
@@ -1079,7 +1023,7 @@ struct PDFPane: View {
                         highlightTarget: session.pdfHighlightTarget,
                         viewportTarget: session.pdfViewportTarget,
                         isImmersive: isImmersive,
-                        horizontalScrollAllowance: horizontalScrollAllowance,
+                        isInspectorPresented: isInspectorPresented,
                         bottomOverlayInset: thumbnailOverlayInset,
                         thumbnailInteractionToken: thumbnailInteractionToken,
                         onCompactPresentationChange: { shouldCompact in
@@ -1218,7 +1162,7 @@ struct ChatPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("Sidebar", selection: sidebarModeBinding) {
+            Picker("Inspector", selection: sidebarModeBinding) {
                 Label("Chat", systemImage: "bubble.left.and.bubble.right")
                     .tag(PaperSidebarMode.chat)
                 Label("Bookmarks", systemImage: "bookmark")
