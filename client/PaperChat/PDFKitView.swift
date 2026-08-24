@@ -19,6 +19,7 @@ struct PDFKitView: NSViewRepresentable {
     @Binding var selectionSnapshot: PDFSelectionSnapshot?
     let highlightTarget: PDFHighlightTarget?
     let viewportTarget: PDFViewportTarget?
+    let documentStructure: DocumentStructure?
     let isImmersive: Bool
     let isInspectorPresented: Bool
     let bottomOverlayInset: CGFloat
@@ -49,6 +50,7 @@ struct PDFKitView: UIViewRepresentable {
     @Binding var selectionSnapshot: PDFSelectionSnapshot?
     let highlightTarget: PDFHighlightTarget?
     let viewportTarget: PDFViewportTarget?
+    let documentStructure: DocumentStructure?
     let isImmersive: Bool
     let isInspectorPresented: Bool
     let bottomOverlayInset: CGFloat
@@ -109,6 +111,7 @@ extension PDFKitView {
         }
         coordinator.applyHighlight(highlightTarget)
         coordinator.applyViewportTarget(viewportTarget)
+        coordinator.applyStructureLinks(documentStructure)
         coordinator.updateContentInsets(bottomOverlayInset: bottomOverlayInset)
         coordinator.handleThumbnailInteraction(thumbnailInteractionToken)
         if immersiveChanged || inspectorChanged {
@@ -146,6 +149,7 @@ extension PDFKitView {
             coordinator.isRestoring = false
             coordinator.syncState()
             coordinator.applyHighlight(highlightTarget)
+            coordinator.applyStructureLinks(documentStructure)
         }
     }
 
@@ -174,6 +178,8 @@ extension PDFKitView {
         var lastInspectorPresented: Bool?
         var lastBottomOverlayInset: CGFloat = -1
         var lastThumbnailInteractionToken: UUID?
+        var appliedStructure: DocumentStructure?
+        var structureLinkAnnotations: [(PDFPage, PDFAnnotation)] = []
         nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
         #if !os(macOS)
         private var scrollObservation: NSKeyValueObservation?
@@ -405,6 +411,66 @@ extension PDFKitView {
                 try? await Task.sleep(for: .seconds(2.5))
                 guard self?.lastHighlightToken == target.token else { return }
                 self?.view?.highlightedSelections = nil
+            }
+        }
+
+        func applyStructureLinks(_ structure: DocumentStructure?) {
+            guard appliedStructure != structure, let document = view?.document else { return }
+            structureLinkAnnotations.forEach { page, annotation in
+                page.removeAnnotation(annotation)
+            }
+            structureLinkAnnotations.removeAll()
+            appliedStructure = structure
+            guard let structure, structure.isReady else { return }
+
+            var targets: [String: DocumentAnchor] = [:]
+            structure.outline.forEach { targets[$0.id] = $0.anchor }
+            structure.figures.forEach { targets[$0.id] = $0.anchor }
+            structure.formulas.forEach { targets[$0.id] = $0.anchor }
+            structure.references.forEach { targets[$0.id] = $0.anchor }
+
+            for link in structure.links {
+                guard let target = targets[link.targetID],
+                      let targetPage = document.page(at: target.pageIndex) else { continue }
+                let destinationBounds = targetPage.bounds(for: .cropBox)
+                let destinationRect = target.rects.first.map {
+                    CGRect(
+                        x: destinationBounds.minX + CGFloat($0.x) * destinationBounds.width,
+                        y: destinationBounds.minY + CGFloat($0.y) * destinationBounds.height,
+                        width: CGFloat($0.width) * destinationBounds.width,
+                        height: CGFloat($0.height) * destinationBounds.height
+                    )
+                }
+                let destination = PDFDestination(
+                    page: targetPage,
+                    at: CGPoint(
+                        x: destinationRect?.minX ?? destinationBounds.minX,
+                        y: destinationRect?.maxY ?? destinationBounds.maxY
+                    )
+                )
+                for source in link.anchor.rects {
+                    guard let sourcePage = document.page(at: source.pageIndex) else { continue }
+                    let pageBounds = sourcePage.bounds(for: .cropBox)
+                    let sourceBounds = CGRect(
+                        x: pageBounds.minX + CGFloat(source.x) * pageBounds.width,
+                        y: pageBounds.minY + CGFloat(source.y) * pageBounds.height,
+                        width: CGFloat(source.width) * pageBounds.width,
+                        height: CGFloat(source.height) * pageBounds.height
+                    )
+                    guard sourceBounds.width > 0, sourceBounds.height > 0 else { continue }
+                    let horizontalPadding = max(0, (12 - sourceBounds.width) / 2)
+                    let verticalPadding = max(0, (12 - sourceBounds.height) / 2)
+                    let bounds = sourceBounds
+                        .insetBy(dx: -horizontalPadding, dy: -verticalPadding)
+                        .intersection(pageBounds)
+                    let annotation = PDFAnnotation(bounds: bounds, forType: .link, withProperties: nil)
+                    let border = PDFBorder()
+                    border.lineWidth = 0
+                    annotation.border = border
+                    annotation.action = PDFActionGoTo(destination: destination)
+                    sourcePage.addAnnotation(annotation)
+                    structureLinkAnnotations.append((sourcePage, annotation))
+                }
             }
         }
 

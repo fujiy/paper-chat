@@ -4,6 +4,7 @@ set -eu
 context="${DOCKER_CONTEXT:-ubuntu}"
 old_project_dir="${ZOTERO_PROJECT_DIR:-../zotero-mcp-library}"
 zotero_env_file="${ZOTERO_ENV_FILE:-$old_project_dir/.env}"
+paperchat_env_file="${PAPERCHAT_ENV_FILE:-.env}"
 volume="${ZOTERO_DATA_VOLUME:-zotero-mcp-library_zotero_data}"
 secrets_volume="${PAPERCHAT_SECRETS_VOLUME:-paperchat_secrets}"
 
@@ -17,6 +18,14 @@ fi
 docker_target() {
   # Intentional word splitting: docker_context_args is either empty or "--context NAME".
   docker $docker_context_args "$@"
+}
+
+compose_target() {
+  if [ -f "$paperchat_env_file" ]; then
+    docker_target compose --env-file "$zotero_env_file" --env-file "$paperchat_env_file" "$@"
+  else
+    docker_target compose --env-file "$zotero_env_file" "$@"
+  fi
 }
 
 ./scripts/prepare-secrets.sh
@@ -44,5 +53,5 @@ docker_target compose \
   -f "$old_project_dir/compose.yaml" -f "$old_project_dir/compose.prod.yaml" \
   --env-file "$zotero_env_file" down
 
-docker_target compose --env-file "$zotero_env_file" up -d --build
-docker_target compose --env-file "$zotero_env_file" ps
+compose_target up -d --build
+compose_target ps

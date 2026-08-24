@@ -88,6 +88,15 @@ class ZoteroLibrary:
             response.raise_for_status()
             return bool(response.json().get("available"))
 
+    async def structure(self, attachment_key: str) -> dict:
+        async with httpx.AsyncClient(base_url=self.settings.zotero_library_url) as client:
+            response = await client.get(
+                f"/internal/attachments/{attachment_key}/structure",
+                headers=self.headers,
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def pdf(self, attachment_key: str, range_header: str | None) -> tuple[int, dict, bytes]:
         headers = self.headers
         if range_header:

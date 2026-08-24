@@ -91,9 +91,6 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     pids_limit: 128
-    mem_limit: 512m
-    cpus: 0.5
-    cpuset: "0"
     tmpfs: [/tmp]
     environment:
       DATA_DIR: /data
@@ -107,11 +104,56 @@ services:
       PDF_OCR_MODE: ${PDF_OCR_MODE:-fallback}
       PDF_OCR_LANGUAGES: ${PDF_OCR_LANGUAGES:-eng+jpn}
       PDF_OCR_DPI: ${PDF_OCR_DPI:-200}
-      OMP_THREAD_LIMIT: "1"
-      OMP_NUM_THREADS: "1"
-      OMP_DYNAMIC: "FALSE"
     volumes:
       - zotero_data:/data
+
+  grobid:
+    build:
+      context: ../zotero-mcp-library
+      dockerfile: Dockerfile.grobid
+    init: true
+    restart: unless-stopped
+    environment:
+      CROSSREF_ACCESS_MODE: ${CROSSREF_ACCESS_MODE:-disabled}
+      CROSSREF_MAILTO: ${CROSSREF_MAILTO:-}
+      CROSSREF_API_KEY: ${CROSSREF_API_KEY:-}
+      GROBID_CONCURRENCY: ${GROBID_CONCURRENCY:-}
+    expose:
+      - "8070"
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/8070'"]
+      interval: 10s
+      timeout: 3s
+      retries: 18
+
+  zotero-library-structure-worker:
+    build:
+      context: ../zotero-mcp-library
+    command: zotero-mcp-worker --mode structure
+    restart: unless-stopped
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    tmpfs: [/tmp]
+    environment:
+      DATA_DIR: /data
+      DATABASE_PATH: /data/db/zotero_mcp.sqlite3
+      PDF_DIR: /data/pdfs
+      STRUCTURE_DIR: /data/structures
+      SYNC_POLL_SECONDS: ${SYNC_POLL_SECONDS:-60}
+      GROBID_ENABLED: ${GROBID_ENABLED:-1}
+      GROBID_URL: http://grobid:8070
+      GROBID_VERSION: ${GROBID_VERSION:-0.9.1}
+      GROBID_DOCUMENT_LIMIT: ${GROBID_DOCUMENT_LIMIT:-3}
+      GROBID_BATCH_SIZE: ${GROBID_BATCH_SIZE:-1}
+      GROBID_TIMEOUT_SECONDS: ${GROBID_TIMEOUT_SECONDS:-600}
+      GROBID_CONSOLIDATE_CITATIONS: ${GROBID_CONSOLIDATE_CITATIONS:-0}
+    volumes:
+      - zotero_data:/data
+    depends_on:
+      grobid:
+        condition: service_healthy
 
 volumes:
   paperchat_data:

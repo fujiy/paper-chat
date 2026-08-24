@@ -15,6 +15,11 @@ class LLMEvent:
     text: str = ""
     backend_thread_id: str | None = None
     backend_turn_id: str | None = None
+    progress_id: str | None = None
+    progress_kind: str | None = None
+    progress_title: str | None = None
+    progress_status: str | None = None
+    progress_operation: str | None = None
 
 
 class FakeBackend:
@@ -27,6 +32,23 @@ class FakeBackend:
     ) -> AsyncIterator[LLMEvent]:
         thread_id = backend_thread_id or "fake-thread"
         yield LLMEvent("thread", backend_thread_id=thread_id)
+        yield LLMEvent(
+            "progress",
+            text="Checking the supplied pages.",
+            progress_id="fake-commentary",
+            progress_kind="commentary",
+            progress_title="Agent update",
+            progress_status="completed",
+            progress_operation="replace",
+        )
+        yield LLMEvent(
+            "progress",
+            progress_id="fake-tool",
+            progress_kind="tool",
+            progress_title="zotero_library: pages",
+            progress_status="completed",
+            progress_operation="replace",
+        )
         answer = (
             "This is a test response grounded in the supplied paper context. "
             "[p. 1](paperchat://page/1)"
@@ -104,7 +126,10 @@ class CodexBackend:
             "instructions. You may use any tool from the zotero_library MCP server when "
             "it helps answer the question, including searching and reading other papers. "
             "Use it proactively when the supplied pages are insufficient. Do not run shell "
-            "commands or use unrelated tools. Cite pages from the currently open PDF with "
+            "commands or use unrelated tools. "
+            "Give brief commentary updates before and between tool calls so the user can "
+            "follow meaningful progress, then provide a self-contained final answer. "
+            "Cite pages from the currently open PDF with "
             "Markdown links in the exact form [p. N](paperchat://page/N), replacing both "
             "occurrences of N with the PDF page number. Place each citation directly after "
             "the claim it supports. For other papers, identify the paper and cite the source "
@@ -193,21 +218,163 @@ class CodexBackend:
             turn_request = await send("turn/start", turn_params)
             turn_result = await response(turn_request)
             turn_id = turn_result["turn"]["id"]
+            message_phases: dict[str, str | None] = {}
+            progress_titles: dict[str, str] = {}
             while line := await process.stdout.readline():
                 payload = json.loads(line)
                 method, params = payload.get("method"), payload.get("params", {})
-                if method == "item/agentMessage/delta" and params.get("turnId") == turn_id:
-                    yield LLMEvent("delta", text=params["delta"], backend_turn_id=turn_id)
                 if method == "turn/completed" and params.get("turn", {}).get("id") == turn_id:
                     status = params["turn"].get("status")
                     if status != "completed":
                         raise RuntimeError(f"Codex turn ended with status {status}")
                     yield LLMEvent("done", backend_thread_id=thread_id, backend_turn_id=turn_id)
                     break
+                if params.get("turnId") != turn_id:
+                    continue
+                if method == "item/started":
+                    item = params.get("item", {})
+                    if item.get("type") == "agentMessage":
+                        message_phases[item["id"]] = item.get("phase")
+                    if progress := self.progress_event(item, completed=False):
+                        if progress.progress_id and progress.progress_title:
+                            progress_titles[progress.progress_id] = progress.progress_title
+                        yield progress
+                elif method == "item/completed":
+                    item = params.get("item", {})
+                    if item.get("type") == "agentMessage":
+                        phase = item.get("phase", message_phases.get(item.get("id")))
+                        if phase == "commentary":
+                            yield LLMEvent(
+                                "progress",
+                                text=item.get("text", ""),
+                                progress_id=item["id"],
+                                progress_kind="commentary",
+                                progress_title="Agent update",
+                                progress_status="completed",
+                                progress_operation="replace",
+                            )
+                        else:
+                            # The completed item is authoritative and also covers
+                            # providers that do not stream agent message deltas.
+                            yield LLMEvent("answer", text=item.get("text", ""))
+                    elif progress := self.progress_event(item, completed=True):
+                        yield progress
+                elif method == "item/agentMessage/delta":
+                    item_id = params.get("itemId", "agent-message")
+                    if message_phases.get(item_id) == "commentary":
+                        yield LLMEvent(
+                            "progress",
+                            text=params.get("delta", ""),
+                            progress_id=item_id,
+                            progress_kind="commentary",
+                            progress_title="Agent update",
+                            progress_status="running",
+                            progress_operation="append",
+                        )
+                    else:
+                        yield LLMEvent("delta", text=params.get("delta", ""))
+                elif method == "item/reasoning/summaryTextDelta":
+                    yield LLMEvent(
+                        "progress",
+                        text=params.get("delta", ""),
+                        progress_id=params.get("itemId", "reasoning"),
+                        progress_kind="reasoning",
+                        progress_title="Thinking",
+                        progress_status="running",
+                        progress_operation="append",
+                    )
+                elif method == "item/mcpToolCall/progress":
+                    yield LLMEvent(
+                        "progress",
+                        text=params.get("message", ""),
+                        progress_id=params.get("itemId", "mcp-tool"),
+                        progress_kind="tool",
+                        progress_title=progress_titles.get(
+                            params.get("itemId", "mcp-tool"), "Using a tool"
+                        ),
+                        progress_status="running",
+                        progress_operation="replace",
+                    )
         finally:
             if process.returncode is None:
                 process.terminate()
                 await process.wait()
+
+    @staticmethod
+    def progress_event(item: dict, completed: bool) -> LLMEvent | None:
+        item_type = item.get("type")
+        item_id = item.get("id")
+        if not item_id:
+            return None
+
+        status = item.get("status")
+        if completed:
+            progress_status = "failed" if status in {"failed", "declined"} else "completed"
+        else:
+            progress_status = "running"
+
+        if item_type == "agentMessage" and item.get("phase") == "commentary":
+            return LLMEvent(
+                "progress",
+                text=item.get("text", ""),
+                progress_id=item_id,
+                progress_kind="commentary",
+                progress_title="Agent update",
+                progress_status=progress_status,
+                progress_operation="replace",
+            )
+        if item_type == "reasoning":
+            summary = "\n".join(item.get("summary") or [])
+            return LLMEvent(
+                "progress",
+                text=summary,
+                progress_id=item_id,
+                progress_kind="reasoning",
+                progress_title="Thinking",
+                progress_status=progress_status,
+                progress_operation="replace",
+            )
+        if item_type == "mcpToolCall":
+            server = item.get("server", "Tool")
+            tool = item.get("tool", "")
+            return LLMEvent(
+                "progress",
+                progress_id=item_id,
+                progress_kind="tool",
+                progress_title=f"{server}: {tool}" if tool else server,
+                progress_status=progress_status,
+                progress_operation="replace",
+            )
+        if item_type == "dynamicToolCall":
+            return LLMEvent(
+                "progress",
+                progress_id=item_id,
+                progress_kind="tool",
+                progress_title=item.get("tool", "Using a tool"),
+                progress_status=progress_status,
+                progress_operation="replace",
+            )
+        if item_type == "commandExecution":
+            return LLMEvent(
+                "progress",
+                text=item.get("command", ""),
+                progress_id=item_id,
+                progress_kind="command",
+                progress_title="Running a command",
+                progress_status=progress_status,
+                progress_operation="replace",
+            )
+        if item_type == "webSearch":
+            return LLMEvent(
+                "progress",
+                text=item.get("query", ""),
+                progress_id=item_id,
+                progress_kind="web_search",
+                progress_title="Searching the web",
+                progress_status=progress_status,
+                progress_operation="replace",
+            )
+        return None
 
     async def list_models(self) -> list[dict]:
         env = {**os.environ, "CODEX_HOME": str(self.settings.codex_home)}

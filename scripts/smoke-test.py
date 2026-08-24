@@ -71,6 +71,14 @@ expect(status, 200, body)
 paper = json.loads(body)
 
 status, _, body = request(
+    "GET", f"/api/papers/{paper['id']}/structure", token=access_token
+)
+expect(status, 200, body)
+structure = json.loads(body)
+if structure.get("status") not in {"pending", "processing", "ready"}:
+    raise RuntimeError(f"unexpected structure status: {structure.get('status')!r}")
+
+status, _, body = request(
     "POST",
     f"/api/papers/{paper['id']}/threads",
     token=access_token,
@@ -158,6 +166,7 @@ print(
             "status": "ok",
             "paper_title": paper["title"],
             "pdf_range_bytes": len(pdf_chunk),
+            "structure_status": structure["status"],
             "sse_events": events,
             "persisted_messages": len(messages),
             "refresh_rotation": "ok",

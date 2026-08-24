@@ -29,6 +29,7 @@ def test_codex_instructions_allow_other_zotero_papers():
 
     assert "any tool from the zotero_library MCP server" in instructions
     assert "including searching and reading other papers" in instructions
+    assert "brief commentary updates" in instructions
 
 
 def test_codex_resume_excludes_turn_history(tmp_path):
@@ -53,3 +54,57 @@ def test_codex_resume_excludes_turn_history(tmp_path):
 
 def test_codex_app_server_stream_limit_handles_large_json_lines():
     assert CodexBackend.APP_SERVER_STREAM_LIMIT >= 8 * 1024 * 1024
+
+
+def test_codex_progress_event_maps_tool_lifecycle():
+    started = CodexBackend.progress_event(
+        {
+            "id": "tool-1",
+            "type": "mcpToolCall",
+            "server": "zotero_library",
+            "tool": "search",
+            "status": "inProgress",
+        },
+        completed=False,
+    )
+    completed = CodexBackend.progress_event(
+        {
+            "id": "tool-1",
+            "type": "mcpToolCall",
+            "server": "zotero_library",
+            "tool": "search",
+            "status": "completed",
+        },
+        completed=True,
+    )
+
+    assert started is not None
+    assert started.progress_title == "zotero_library: search"
+    assert started.progress_status == "running"
+    assert completed is not None
+    assert completed.progress_status == "completed"
+
+
+def test_codex_progress_event_only_maps_commentary_agent_messages():
+    commentary = CodexBackend.progress_event(
+        {
+            "id": "message-1",
+            "type": "agentMessage",
+            "phase": "commentary",
+            "text": "Searching related papers.",
+        },
+        completed=True,
+    )
+    final_answer = CodexBackend.progress_event(
+        {
+            "id": "message-2",
+            "type": "agentMessage",
+            "phase": "final_answer",
+            "text": "The result is...",
+        },
+        completed=True,
+    )
+
+    assert commentary is not None
+    assert commentary.text == "Searching related papers."
+    assert final_answer is None

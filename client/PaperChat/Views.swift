@@ -306,6 +306,9 @@ struct WorkspaceDetail: View {
                             session.isPDFSearchPresented.toggle()
                         }
                     }
+                    Button("Document Structure", systemImage: "list.bullet.indent") {
+                        model.presentStructure(in: session)
+                    }
                     Menu("Add Bookmark", systemImage: "bookmark") {
                         if session.selectionSnapshot != nil {
                             Button("Selected Text", systemImage: "text.quote") {
@@ -1022,6 +1025,7 @@ struct PDFPane: View {
                         selectionSnapshot: $session.selectionSnapshot,
                         highlightTarget: session.pdfHighlightTarget,
                         viewportTarget: session.pdfViewportTarget,
+                        documentStructure: session.documentStructure,
                         isImmersive: isImmersive,
                         isInspectorPresented: isInspectorPresented,
                         bottomOverlayInset: thumbnailOverlayInset,
@@ -1165,6 +1169,8 @@ struct ChatPane: View {
             Picker("Inspector", selection: sidebarModeBinding) {
                 Label("Chat", systemImage: "bubble.left.and.bubble.right")
                     .tag(PaperSidebarMode.chat)
+                Label("Navigate", systemImage: "list.bullet.indent")
+                    .tag(PaperSidebarMode.structure)
                 Label("Bookmarks", systemImage: "bookmark")
                     .tag(PaperSidebarMode.bookmarks)
             }
@@ -1205,6 +1211,8 @@ struct ChatPane: View {
                     }
                 case .bookmarks:
                     BookmarksView(session: session)
+                case .structure:
+                    StructureNavigationView(session: session)
                 }
             }
         }
@@ -1220,10 +1228,227 @@ struct ChatPane: View {
                     session.sidebarMode = mode
                     if mode == .bookmarks {
                         Task { await model.loadBookmarks(in: session) }
+                    } else if mode == .structure {
+                        Task { await model.loadStructure(in: session) }
                     }
                 }
             }
         )
+    }
+}
+
+struct StructureNavigationView: View {
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject var session: PaperSession
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("Document navigation", selection: $session.structureSection) {
+                Label("Outline", systemImage: "list.bullet.indent")
+                    .tag(StructureSection.outline)
+                Label("Figures", systemImage: "photo.on.rectangle")
+                    .tag(StructureSection.figures)
+                Label("Equations", systemImage: "function")
+                    .tag(StructureSection.equations)
+                Label("References", systemImage: "books.vertical")
+                    .tag(StructureSection.references)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(10)
+            Divider()
+
+            if session.isStructureLoading, session.documentStructure == nil {
+                Spacer()
+                ProgressView("Loading document structure…")
+                Spacer()
+            } else if let structure = session.documentStructure {
+                structureContent(structure)
+            } else {
+                unavailable(
+                    title: "Structure Not Available",
+                    systemImage: "doc.text.magnifyingglass",
+                    description: "GROBID has not processed this paper yet."
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func structureContent(_ structure: DocumentStructure) -> some View {
+        if structure.status == "processing" || structure.status == "pending" {
+            unavailable(
+                title: "Analysis in Progress",
+                systemImage: "hourglass",
+                description: "This paper is queued for structure extraction."
+            )
+        } else if structure.status == "failed" {
+            unavailable(
+                title: "Analysis Failed",
+                systemImage: "exclamationmark.triangle",
+                description: structure.error ?? "GROBID could not analyze this PDF."
+            )
+        } else {
+            switch session.structureSection {
+            case .outline:
+                itemList(structure.outline) { node in
+                    structureRow(
+                        title: node.title,
+                        subtitle: pageLabel(node.anchor),
+                        icon: "text.alignleft",
+                        indentation: max(0, node.level - 1)
+                    ) {
+                        model.openStructureAnchor(node.anchor, in: session)
+                    }
+                }
+            case .figures:
+                itemList(structure.figures) { item in
+                    structureRow(
+                        title: item.title,
+                        subtitle: compactSubtitle(item.caption, anchor: item.anchor),
+                        icon: item.kind == "table" ? "tablecells" : "photo"
+                    ) {
+                        model.openStructureAnchor(item.anchor, in: session)
+                    }
+                }
+            case .equations:
+                itemList(structure.formulas) { item in
+                    structureRow(
+                        title: item.title,
+                        subtitle: compactSubtitle(item.text, anchor: item.anchor),
+                        icon: "function"
+                    ) {
+                        model.openStructureAnchor(item.anchor, in: session)
+                    }
+                }
+            case .references:
+                referenceList(structure.references)
+            }
+        }
+    }
+
+    private func itemList<Item: Identifiable, Row: View>(
+        _ items: [Item],
+        @ViewBuilder row: @escaping (Item) -> Row
+    ) -> some View {
+        Group {
+            if items.isEmpty {
+                ContentUnavailableView("No Items Found", systemImage: "list.bullet")
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        ForEach(items) { item in row(item) }
+                    }
+                    .padding(10)
+                }
+            }
+        }
+    }
+
+    private func referenceList(_ references: [DocumentReference]) -> some View {
+        Group {
+            if references.isEmpty {
+                ContentUnavailableView("No References Found", systemImage: "books.vertical")
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(references) { reference in
+                            HStack(alignment: .top, spacing: 8) {
+                                Button {
+                                    model.openStructureAnchor(reference.anchor, in: session)
+                                } label: {
+                                    HStack(alignment: .top, spacing: 9) {
+                                        Text(reference.label)
+                                            .font(.caption.monospacedDigit())
+                                            .foregroundStyle(.secondary)
+                                            .frame(minWidth: 22, alignment: .trailing)
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(reference.title)
+                                                .font(.callout.weight(.medium))
+                                                .lineLimit(3)
+                                            Text(referenceSubtitle(reference))
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(2)
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+
+                                if reference.matchedAttachmentKey != nil {
+                                    Button("Open Library Paper", systemImage: "arrow.up.right.square") {
+                                        Task { await model.openMatchedReference(reference) }
+                                    }
+                                    .labelStyle(.iconOnly)
+                                    .buttonStyle(.borderless)
+                                    .help("Open matching paper from your library")
+                                }
+                            }
+                            .padding(8)
+                            .background(.quaternary.opacity(0.34), in: RoundedRectangle(cornerRadius: 8))
+                        }
+                    }
+                    .padding(10)
+                }
+            }
+        }
+    }
+
+    private func structureRow(
+        title: String,
+        subtitle: String,
+        icon: String,
+        indentation: Int = 0,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 9) {
+                Image(systemName: icon)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.callout.weight(.medium)).lineLimit(3)
+                    if !subtitle.isEmpty {
+                        Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, CGFloat(indentation) * 14)
+            .padding(8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func unavailable(title: String, systemImage: String, description: String) -> some View {
+        VStack {
+            Spacer()
+            ContentUnavailableView(title, systemImage: systemImage, description: Text(description))
+            Button("Refresh") { Task { await model.loadStructure(in: session) } }
+                .disabled(session.isStructureLoading)
+            Spacer()
+        }
+    }
+
+    private func pageLabel(_ anchor: DocumentAnchor?) -> String {
+        anchor.map { "Page \($0.pageIndex + 1)" } ?? "Location unavailable"
+    }
+
+    private func compactSubtitle(_ text: String?, anchor: DocumentAnchor?) -> String {
+        [text, pageLabel(anchor)].compactMap { value in
+            guard let value, !value.isEmpty else { return nil }
+            return value
+        }.joined(separator: " · ")
+    }
+
+    private func referenceSubtitle(_ reference: DocumentReference) -> String {
+        let authors = reference.authors.prefix(2).joined(separator: ", ")
+        return [authors.isEmpty ? nil : authors, reference.year, pageLabel(reference.anchor)]
+            .compactMap { $0 }
+            .joined(separator: " · ")
     }
 }
 
@@ -1785,11 +2010,93 @@ private struct StreamingMessageBubble: View {
     let onContentUpdate: () -> Void
 
     var body: some View {
-        MessageBubble(message: message.snapshot, session: session)
-            .onAppear(perform: onContentUpdate)
-            .onChange(of: message.content) { _, _ in
-                onContentUpdate()
+        VStack(alignment: .leading, spacing: 10) {
+            if !message.progressItems.isEmpty {
+                AgentProgressView(items: message.progressItems)
             }
+            if !message.content.isEmpty || message.progressItems.isEmpty {
+                MessageBubble(message: message.snapshot, session: session)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear(perform: onContentUpdate)
+        .onChange(of: message.content) { _, _ in
+            onContentUpdate()
+        }
+        .onChange(of: message.progressItems) { _, _ in
+            onContentUpdate()
+        }
+    }
+}
+
+private struct AgentProgressView: View {
+    let items: [ChatProgressItem]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 7) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Working…")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(Color.platformPrimaryLabel)
+            }
+
+            ForEach(items) { item in
+                HStack(alignment: .top, spacing: 8) {
+                    statusIcon(for: item)
+                        .frame(width: 16, height: 16)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(item.title)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Color.platformSecondaryLabel)
+                        if !item.detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text(item.detail)
+                                .font(item.kind == "command" ? .caption.monospaced() : .caption)
+                                .foregroundStyle(Color.platformSecondaryLabel)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.secondary.opacity(0.08))
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+        }
+    }
+
+    @ViewBuilder
+    private func statusIcon(for item: ChatProgressItem) -> some View {
+        if item.status == "running" {
+            ProgressView()
+                .controlSize(.mini)
+        } else if item.status == "failed" {
+            Image(systemName: "xmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+        } else {
+            Image(systemName: iconName(for: item.kind))
+                .font(.caption)
+                .foregroundStyle(Color.platformTertiaryLabel)
+        }
+    }
+
+    private func iconName(for kind: String) -> String {
+        switch kind {
+        case "commentary": "text.bubble"
+        case "reasoning": "sparkles"
+        case "tool": "wrench.and.screwdriver"
+        case "command": "terminal"
+        case "web_search": "globe"
+        default: "checkmark.circle"
+        }
     }
 }
 

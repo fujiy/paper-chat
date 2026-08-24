@@ -40,6 +40,28 @@ def client_for(tmp_path, monkeypatch) -> TestClient:
     async def text_availability(self, attachment_key):
         return True
 
+    async def structure(self, attachment_key):
+        return {
+            "attachment_key": attachment_key,
+            "status": "ready",
+            "parser": "grobid",
+            "parser_version": "0.9.1",
+            "citation_consolidation": "none",
+            "outline": [
+                {
+                    "id": "section-1",
+                    "parent_id": None,
+                    "title": "Introduction",
+                    "level": 1,
+                    "anchor": {"page_index": 0, "rects": []},
+                }
+            ],
+            "figures": [],
+            "formulas": [],
+            "references": [],
+            "links": [],
+        }
+
     async def papers(self, limit=500, offset=0):
         return {
             "papers": [
@@ -90,6 +112,7 @@ def client_for(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setattr(
         "paperchat.library.ZoteroLibrary.text_availability", text_availability
     )
+    monkeypatch.setattr("paperchat.library.ZoteroLibrary.structure", structure)
     monkeypatch.setattr("paperchat.library.ZoteroLibrary.papers", papers)
     monkeypatch.setattr("paperchat.library.ZoteroLibrary.search", search)
     return TestClient(app)
@@ -134,6 +157,7 @@ def test_paper_thread_reading_state_and_streaming_chat(tmp_path, monkeypatch):
         availability = client.get(
             f"/api/papers/{paper['id']}/text-availability", headers=headers
         )
+        structure = client.get(f"/api/papers/{paper['id']}/structure", headers=headers)
 
         thread_response = client.post(
             f"/api/papers/{paper['id']}/threads", json={"title": "Main"}, headers=headers
@@ -166,6 +190,8 @@ def test_paper_thread_reading_state_and_streaming_chat(tmp_path, monkeypatch):
     assert models.json()["models"][0]["id"] == "fake"
     assert models.json()["models"][0]["default_reasoning_effort"] == "medium"
     assert availability.json() == {"available": True}
+    assert structure.status_code == 200
+    assert structure.json()["outline"][0]["title"] == "Introduction"
     assert chat.status_code == 200
     events = [
         line.removeprefix("event: ")
@@ -174,10 +200,11 @@ def test_paper_thread_reading_state_and_streaming_chat(tmp_path, monkeypatch):
     ]
     assert events[0] == "message"
     assert events[-1] == "done"
-    assert set(events[1:-1]) == {"delta"}
+    assert set(events[1:-1]) == {"progress", "delta"}
     assert [message["role"] for message in messages] == ["user", "assistant"]
     assert messages[1]["status"] == "completed"
     assert "[p. 1]" in messages[1]["content"]
+    assert "Checking the supplied pages" not in messages[1]["content"]
     assert paper_after["reading_state"]["page_index"] == 4
 
 

@@ -84,6 +84,10 @@ actor APIClient {
         return response.available
     }
 
+    func structure(paperID: String) async throws -> DocumentStructure {
+        try await request("api/papers/\(paperID)/structure")
+    }
+
     func setStar(paperID: String, starred: Bool) async throws -> Bool {
         let response: StarResponse = try await request(
             "api/papers/\(paperID)/star",
@@ -233,6 +237,17 @@ actor APIClient {
                                 continuation.yield(.message(payload?["message_id"] as? String ?? ""))
                             case "delta":
                                 continuation.yield(.delta(payload?["delta"] as? String ?? ""))
+                            case "answer":
+                                continuation.yield(.answer(payload?["content"] as? String ?? ""))
+                            case "progress":
+                                continuation.yield(.progress(ChatProgressUpdate(
+                                    id: payload?["id"] as? String ?? UUID().uuidString,
+                                    kind: payload?["kind"] as? String ?? "activity",
+                                    title: payload?["title"] as? String ?? "Working",
+                                    detail: payload?["detail"] as? String ?? "",
+                                    status: payload?["status"] as? String ?? "running",
+                                    operation: payload?["operation"] as? String ?? "replace"
+                                )))
                             case "done":
                                 continuation.yield(.done)
                             case "error":

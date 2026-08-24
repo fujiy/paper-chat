@@ -42,13 +42,29 @@ struct ChatRichText: View {
                         .font(.body)
                         .textSelection(.enabled)
                 case let .math(content):
+                    let preparedMath = MathLatexCompatibility.prepareDisplay(content)
                     ScrollView(.horizontal) {
-                        MathTypesetView(
-                            latex: content,
-                            mode: .display,
-                            fontSize: 17
-                        )
-                        .fixedSize(horizontal: true, vertical: false)
+                        if MathLatexCompatibility.canParse(preparedMath.latex) {
+                            MathTypesetView(
+                                latex: preparedMath.latex,
+                                mode: .display,
+                                fontSize: 17
+                            )
+                            .padding(preparedMath.isBoxed ? 5 : 0)
+                            .overlay {
+                                if preparedMath.isBoxed {
+                                    Rectangle()
+                                        .stroke(.primary, lineWidth: 1)
+                                }
+                            }
+                            .fixedSize(horizontal: true, vertical: false)
+                        } else {
+                            Text("\\[\n\(content)\n\\]")
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundStyle(.red)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
                     }
                     .defaultScrollAnchor(.center, for: .alignment)
                     .frame(maxWidth: .infinity)
@@ -234,6 +250,77 @@ private struct ChatRichBlock: Identifiable {
     }
 }
 
+private enum MathLatexCompatibility {
+    struct DisplayMath {
+        let latex: String
+        let isBoxed: Bool
+    }
+
+    static func prepareDisplay(_ latex: String) -> DisplayMath {
+        if let unboxed = unwrapOuterBox(in: latex) {
+            return DisplayMath(latex: normalize(unboxed), isBoxed: true)
+        }
+        return DisplayMath(latex: normalize(latex), isBoxed: false)
+    }
+
+    static func normalize(_ latex: String) -> String {
+        let normalized = latex
+            .replacingOccurrences(of: "\\operatorname*", with: "\\mathrm")
+            .replacingOccurrences(of: "\\operatorname", with: "\\mathrm")
+            // SwiftMath does not support nested \boxed commands. Keeping the
+            // grouped argument is preferable to dropping the entire equation.
+            .replacingOccurrences(of: "\\boxed", with: "")
+        return normalized.replacingOccurrences(
+            of: #"\\(?:bigg|Bigg|big|Big)[lr]?(?=\s*[\(\)\[\]\{\}\|])"#,
+            with: "",
+            options: .regularExpression
+        )
+    }
+
+    static func canParse(_ latex: String) -> Bool {
+        var error: NSError?
+        return MTMathListBuilder.build(fromString: latex, error: &error) != nil
+            && error == nil
+    }
+
+    private static func unwrapOuterBox(in latex: String) -> String? {
+        let trimmed = latex.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefix = "\\boxed{"
+        guard trimmed.hasPrefix(prefix) else { return nil }
+
+        let contentStart = trimmed.index(trimmed.startIndex, offsetBy: prefix.count)
+        var depth = 1
+        var cursor = contentStart
+        while cursor < trimmed.endIndex {
+            let character = trimmed[cursor]
+            if character == "{", !isEscaped(at: cursor, in: trimmed) {
+                depth += 1
+            } else if character == "}", !isEscaped(at: cursor, in: trimmed) {
+                depth -= 1
+                if depth == 0 {
+                    let trailing = trimmed[trimmed.index(after: cursor)...]
+                    guard trailing.allSatisfy(\.isWhitespace) else { return nil }
+                    return String(trimmed[contentStart..<cursor])
+                }
+            }
+            cursor = trimmed.index(after: cursor)
+        }
+        return nil
+    }
+
+    private static func isEscaped(at index: String.Index, in source: String) -> Bool {
+        var slashCount = 0
+        var cursor = index
+        while cursor > source.startIndex {
+            let previous = source.index(before: cursor)
+            guard source[previous] == "\\" else { break }
+            slashCount += 1
+            cursor = previous
+        }
+        return slashCount.isMultiple(of: 2) == false
+    }
+}
+
 @MainActor
 private enum InlineMathDocument {
     static func containsMath(in source: String) -> Bool {
@@ -255,10 +342,12 @@ private enum InlineMathDocument {
             let prefix = String(source[cursor..<range.full.lowerBound])
             result = result + (rendersMarkdown ? Text(markdown(prefix)) : Text(prefix))
             let latex = String(source[range.content])
-            if let image = mathImage(latex: latex, fontSize: fontSize) {
-                result = result + Text(image).baselineOffset(-2)
+            if let renderedMath = mathImage(latex: latex, fontSize: fontSize) {
+                result = result + Text(renderedMath.image)
+                    .baselineOffset(-renderedMath.descent)
             } else {
-                result = result + Text(latex)
+                let original = String(source[range.full])
+                result = result + Text(original).foregroundColor(.red)
             }
             cursor = range.full.upperBound
         }
@@ -313,39 +402,35 @@ private enum InlineMathDocument {
         return result
     }
 
-    private static func mathImage(latex: String, fontSize: CGFloat) -> Image? {
-        let label = MTMathUILabel()
-        label.latex = latex
-        label.font = MTFontManager().font(
-            withName: MathFont.latinModernFont.rawValue,
-            size: fontSize
+    private struct RenderedMath {
+        let image: Image
+        let descent: CGFloat
+    }
+
+    private static func mathImage(latex: String, fontSize: CGFloat) -> RenderedMath? {
+        #if os(macOS)
+        let textColor = NSColor.labelColor
+        #else
+        let textColor = UIColor.label
+        #endif
+
+        var renderer = MathImage(
+            latex: MathLatexCompatibility.normalize(latex),
+            fontSize: fontSize,
+            textColor: textColor,
+            labelMode: .text,
+            textAlignment: .left
         )
-        label.labelMode = .text
-        label.textAlignment = .left
+        renderer.contentInsets = .init(top: 0, left: 2, bottom: 0, right: 2)
+        let (_, image, layout) = renderer.asImage()
+        guard let image, let layout else { return nil }
 
         #if os(macOS)
-        label.textColor = .labelColor
-        let size = label.fittingSize
-        guard size.width > 0, size.height > 0 else { return nil }
-        label.frame = CGRect(origin: .zero, size: size)
-        guard let representation = label.bitmapImageRepForCachingDisplay(in: label.bounds) else {
-            return nil
-        }
-        label.cacheDisplay(in: label.bounds, to: representation)
-        let image = NSImage(size: size)
-        image.addRepresentation(representation)
-        return Image(nsImage: image)
+        let swiftUIImage = Image(nsImage: image)
         #else
-        label.textColor = .label
-        let size = label.intrinsicContentSize
-        guard size.width > 0, size.height > 0 else { return nil }
-        label.frame = CGRect(origin: .zero, size: size)
-        let renderer = UIGraphicsImageRenderer(size: size)
-        let image = renderer.image { context in
-            label.layer.render(in: context.cgContext)
-        }
-        return Image(uiImage: image)
+        let swiftUIImage = Image(uiImage: image)
         #endif
+        return RenderedMath(image: swiftUIImage, descent: layout.descent)
     }
 }
 
@@ -375,7 +460,7 @@ struct MathTypesetView: NSViewRepresentable {
     }
 
     private func configure(_ view: MTMathUILabel) {
-        view.latex = latex
+        view.latex = MathLatexCompatibility.normalize(latex)
         let font = MTFontManager().font(withName: MathFont.latinModernFont.rawValue, size: fontSize)
         view.font = font
         view.textAlignment = mode == .display ? .center : .left
@@ -410,7 +495,7 @@ struct MathTypesetView: UIViewRepresentable {
     }
 
     private func configure(_ view: MTMathUILabel) {
-        view.latex = latex
+        view.latex = MathLatexCompatibility.normalize(latex)
         let font = MTFontManager().font(withName: MathFont.latinModernFont.rawValue, size: fontSize)
         view.font = font
         view.textAlignment = mode == .display ? .center : .left

@@ -141,10 +141,10 @@
 				Base,
 			);
 			mainGroup = A40000000000000000000001;
-			productRefGroup = A40000000000000000000004 /* Products */;
 			packageReferences = (
 				C10000000000000000000001 /* XCRemoteSwiftPackageReference "SwiftMath" */,
 			);
+			productRefGroup = A40000000000000000000004 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -181,25 +181,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		C10000000000000000000001 /* XCRemoteSwiftPackageReference "SwiftMath" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/mgriebling/SwiftMath.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.7.3;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		B10000000000000000000001 /* SwiftMath */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = C10000000000000000000001 /* XCRemoteSwiftPackageReference "SwiftMath" */;
-			productName = SwiftMath;
-		};
-/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		AA0000000000000000000001 /* Debug */ = {
@@ -293,6 +274,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		C10000000000000000000001 /* XCRemoteSwiftPackageReference "SwiftMath" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mgriebling/SwiftMath.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.7.3;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B10000000000000000000001 /* SwiftMath */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C10000000000000000000001 /* XCRemoteSwiftPackageReference "SwiftMath" */;
+			productName = SwiftMath;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A80000000000000000000001 /* Project object */;
 }

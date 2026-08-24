@@ -118,6 +118,23 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+struct ChatProgressItem: Identifiable, Equatable, Sendable {
+    let id: String
+    var kind: String
+    var title: String
+    var detail: String
+    var status: String
+}
+
+struct ChatProgressUpdate: Sendable {
+    let id: String
+    let kind: String
+    let title: String
+    let detail: String
+    let status: String
+    let operation: String
+}
+
 @MainActor
 final class StreamingChatMessage: ObservableObject, Identifiable {
     let id: String
@@ -125,6 +142,7 @@ final class StreamingChatMessage: ObservableObject, Identifiable {
     let createdAt: String
     @Published private(set) var content = ""
     @Published private(set) var status = "streaming"
+    @Published private(set) var progressItems: [ChatProgressItem] = []
 
     private var pendingContent = ""
     private var flushTask: Task<Void, Never>?
@@ -146,6 +164,34 @@ final class StreamingChatMessage: ObservableObject, Identifiable {
             try? await Task.sleep(for: .milliseconds(60))
             guard !Task.isCancelled else { return }
             self?.flushPendingContent()
+        }
+    }
+
+    func replaceContent(with content: String) {
+        flushTask?.cancel()
+        flushTask = nil
+        pendingContent = ""
+        self.content = content
+    }
+
+    func updateProgress(_ update: ChatProgressUpdate) {
+        if let index = progressItems.firstIndex(where: { $0.id == update.id }) {
+            progressItems[index].kind = update.kind
+            progressItems[index].title = update.title
+            if update.operation == "append" {
+                progressItems[index].detail += update.detail
+            } else if !update.detail.isEmpty || progressItems[index].detail.isEmpty {
+                progressItems[index].detail = update.detail
+            }
+            progressItems[index].status = update.status
+        } else {
+            progressItems.append(ChatProgressItem(
+                id: update.id,
+                kind: update.kind,
+                title: update.title,
+                detail: update.detail,
+                status: update.status
+            ))
         }
     }
 
@@ -191,7 +237,15 @@ enum BookmarkKind: String, Codable, Hashable, Sendable {
 
 enum PaperSidebarMode: String, CaseIterable, Hashable, Sendable {
     case chat
+    case structure
     case bookmarks
+}
+
+enum StructureSection: String, CaseIterable, Hashable, Sendable {
+    case outline
+    case figures
+    case equations
+    case references
 }
 
 struct BookmarkSelectionRect: Codable, Hashable, Sendable {
@@ -200,6 +254,79 @@ struct BookmarkSelectionRect: Codable, Hashable, Sendable {
     let y: Double
     let width: Double
     let height: Double
+}
+
+struct DocumentAnchor: Codable, Hashable, Sendable {
+    let pageIndex: Int
+    let rects: [BookmarkSelectionRect]
+}
+
+struct DocumentOutlineNode: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let parentID: String?
+    let title: String
+    let level: Int
+    let anchor: DocumentAnchor?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, level, anchor
+        case parentID = "parentId"
+    }
+}
+
+struct DocumentObject: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let kind: String
+    let label: String?
+    let title: String
+    let caption: String?
+    let text: String?
+    let anchor: DocumentAnchor?
+}
+
+struct DocumentReference: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let kind: String
+    let label: String
+    let title: String
+    let authors: [String]
+    let year: String?
+    let doi: String?
+    let raw: String?
+    let anchor: DocumentAnchor?
+    let matchedItemKey: String?
+    let matchedAttachmentKey: String?
+    let matchMethod: String?
+}
+
+struct DocumentStructureLink: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let kind: String
+    let text: String?
+    let targetID: String
+    let anchor: DocumentAnchor
+
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, text, anchor
+        case targetID = "targetId"
+    }
+}
+
+struct DocumentStructure: Codable, Hashable, Sendable {
+    let attachmentKey: String
+    let status: String
+    let error: String?
+    let parser: String?
+    let parserVersion: String?
+    let citationConsolidation: String?
+    let updatedAt: String?
+    let outline: [DocumentOutlineNode]
+    let figures: [DocumentObject]
+    let formulas: [DocumentObject]
+    let references: [DocumentReference]
+    let links: [DocumentStructureLink]
+
+    var isReady: Bool { status == "ready" }
 }
 
 struct PDFSelectionSnapshot: Equatable, Sendable {
@@ -407,6 +534,9 @@ final class PaperSession: ObservableObject, Identifiable {
     @Published var chatRoute: ChatRoute = .list
     @Published var bookmarks: [PaperBookmark] = []
     @Published var bookmarkSuggestions: [BookmarkSuggestion] = []
+    @Published var documentStructure: DocumentStructure?
+    @Published var isStructureLoading = false
+    @Published var structureSection: StructureSection = .outline
     @Published var isPDFSearchPresented = false
     @Published var pdfSearchQuery = ""
     @Published var pdfSearchResults: [PDFSearchResult] = []
@@ -425,6 +555,8 @@ final class PaperSession: ObservableObject, Identifiable {
 enum StreamEvent: Sendable {
     case message(String)
     case delta(String)
+    case answer(String)
+    case progress(ChatProgressUpdate)
     case done
     case failure(String)
 }

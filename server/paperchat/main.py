@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from contextlib import asynccontextmanager
 from itertools import count
 from typing import Annotated, Literal
@@ -549,6 +548,25 @@ async def paper_text_availability(
         return {"available": False}
 
 
+@app.get("/api/papers/{paper_id}/structure")
+async def paper_structure(
+    paper_id: str,
+    _: Session,
+    settings: SettingsDependency,
+):
+    with connect(settings.resolved_database_path) as conn:
+        identifier = conn.execute(
+            """
+            SELECT value FROM paper_identifiers
+            WHERE paper_id = ? AND kind = 'zotero' LIMIT 1
+            """,
+            (paper_id,),
+        ).fetchone()
+    if not identifier:
+        raise HTTPException(404, "PDF source not found")
+    return await ZoteroLibrary(settings).structure(identifier["value"])
+
+
 @app.patch("/api/papers/{paper_id}/reading-state")
 def save_reading_state(
     paper_id: str,
@@ -757,7 +775,6 @@ async def send_message(
     async def generate():
         answer = ""
         terminal = False
-        last_flush = 0.0
 
         def fail_generation() -> None:
             nonlocal terminal
@@ -768,7 +785,7 @@ async def send_message(
                 conn.execute(
                     "UPDATE messages SET content = ?, status = 'failed', updated_at = ? "
                     "WHERE id = ?",
-                    (answer, now(), assistant_id),
+                    ("", now(), assistant_id),
                 )
                 conn.execute(
                     "UPDATE threads SET backend_status = 'ready', updated_at = ? WHERE id = ?",
@@ -789,16 +806,23 @@ async def send_message(
                         )
                 elif event.kind == "delta":
                     answer += event.text
-                    current_time = time.monotonic()
-                    if current_time - last_flush >= 0.25:
-                        with connect(settings.resolved_database_path) as conn:
-                            conn.execute(
-                                "UPDATE messages SET content = ?, updated_at = ? WHERE id = ?",
-                                (answer, now(), assistant_id),
-                            )
-                        last_flush = current_time
-                        thread_events.publish(thread_id)
                     yield sse("delta", {"message_id": assistant_id, "delta": event.text})
+                elif event.kind == "answer":
+                    answer = event.text
+                    yield sse("answer", {"message_id": assistant_id, "content": answer})
+                elif event.kind == "progress":
+                    yield sse(
+                        "progress",
+                        {
+                            "message_id": assistant_id,
+                            "id": event.progress_id,
+                            "kind": event.progress_kind,
+                            "title": event.progress_title,
+                            "detail": event.text,
+                            "status": event.progress_status,
+                            "operation": event.progress_operation,
+                        },
+                    )
                 elif event.kind == "done":
                     with connect(settings.resolved_database_path) as conn:
                         conn.execute(

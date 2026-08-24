@@ -5,6 +5,7 @@ DerivedData/
 xcuserdata/
 *.xcuserstate
 docs/private/
+compose.override.yaml
 __pycache__/
 *.py[cod]
 

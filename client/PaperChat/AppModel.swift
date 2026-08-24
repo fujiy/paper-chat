@@ -331,6 +331,32 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Opens a PDF selected by Zotero's external PDF viewer integration.
+    /// Zotero hands macOS a file URL such as
+    /// `file:///…/Zotero/storage/FQCTIC3M/document.pdf`; the storage directory
+    /// name is the attachment key understood by the PaperChat server.
+    func openExternalPDF(at url: URL) async {
+        guard let attachmentKey = Self.zoteroAttachmentKey(from: url) else {
+            errorMessage = "This PDF is not a Zotero storage attachment."
+            return
+        }
+
+        // A document-open event can arrive before the window's startup task.
+        // Restore the saved session here as well so a cold launch can resolve it.
+        if !isAuthenticated {
+            await restoreSession()
+        }
+        guard isAuthenticated else {
+            errorMessage = "Sign in to PaperChat before opening a Zotero PDF."
+            return
+        }
+
+        await perform {
+            let paper = try await client.resolve(attachmentKey: attachmentKey)
+            _ = try await openPaper(paper, fromSidebar: false)
+        }
+    }
+
     func open(paper: Paper, fromSidebar: Bool = false) async {
         await perform { _ = try await openPaper(paper, fromSidebar: fromSidebar) }
     }
@@ -350,6 +376,9 @@ final class AppModel: ObservableObject {
     private func openPaper(_ paper: Paper, fromSidebar: Bool) async throws -> PaperSession {
         if let existing = openSessions.first(where: { $0.id == paper.id }) {
             refreshAgentTextAvailability(in: existing)
+            if existing.documentStructure == nil {
+                Task { await loadStructure(in: existing) }
+            }
             if !fromSidebar {
                 promoteInRecent(existing.paper)
             }
@@ -379,6 +408,7 @@ final class AppModel: ObservableObject {
         }
         openSessions.append(session)
         refreshAgentTextAvailability(in: session)
+        Task { await loadStructure(in: session) }
         navigate(to: .paper(session.id), fromSidebar: fromSidebar)
         return session
     }
@@ -432,6 +462,45 @@ final class AppModel: ObservableObject {
         session.sidebarMode = .bookmarks
         session.isChatPresented = true
         Task { await loadBookmarks(in: session) }
+    }
+
+    func presentStructure(in session: PaperSession) {
+        session.sidebarMode = .structure
+        session.isChatPresented = true
+        Task { await loadStructure(in: session) }
+    }
+
+    func loadStructure(in session: PaperSession) async {
+        guard !session.isStructureLoading else { return }
+        session.isStructureLoading = true
+        defer { session.isStructureLoading = false }
+        do {
+            session.documentStructure = try await client.structure(paperID: session.id)
+        } catch {
+            guard !Self.isCancellation(error) else { return }
+            report(error)
+        }
+    }
+
+    func openStructureAnchor(_ anchor: DocumentAnchor?, in session: PaperSession) {
+        guard let anchor else { return }
+        session.pageIndex = anchor.pageIndex
+        session.pdfViewportTarget = PDFViewportTarget(
+            token: UUID(), pageIndex: anchor.pageIndex, scrollOffset: 0
+        )
+        session.pdfHighlightTarget = PDFHighlightTarget(
+            token: UUID(), query: nil, pageIndex: anchor.pageIndex,
+            occurrenceIndex: nil, rects: anchor.rects
+        )
+        recordPageActivity(in: session, pageIndex: anchor.pageIndex)
+    }
+
+    func openMatchedReference(_ reference: DocumentReference) async {
+        guard let attachmentKey = reference.matchedAttachmentKey else { return }
+        await perform {
+            let paper = try await client.resolve(attachmentKey: attachmentKey)
+            _ = try await openPaper(paper, fromSidebar: false)
+        }
     }
 
     func loadBookmarks(in session: PaperSession) async {
@@ -662,6 +731,10 @@ final class AppModel: ObservableObject {
                 switch event {
                 case let .delta(text):
                     assistant.append(text)
+                case let .answer(content):
+                    assistant.replaceContent(with: content)
+                case let .progress(update):
+                    assistant.updateProgress(update)
                 case .failure:
                     assistant.finish(status: "failed")
                     if let messages = try? await client.messages(threadID: thread.id) {
@@ -901,6 +974,18 @@ final class AppModel: ObservableObject {
             return
         }
         errorMessage = error.localizedDescription
+    }
+
+    nonisolated static func zoteroAttachmentKey(from url: URL) -> String? {
+        guard url.isFileURL, url.pathExtension.lowercased() == "pdf" else { return nil }
+        let components = url.pathComponents
+        guard let storageIndex = components.lastIndex(of: "storage"),
+              components.indices.contains(storageIndex + 1) else { return nil }
+        let key = components[storageIndex + 1]
+        guard key.range(of: "^[A-Z0-9]{8}$", options: .regularExpression) != nil else {
+            return nil
+        }
+        return key
     }
 
     nonisolated private static func isCancellation(_ error: Error) -> Bool {
