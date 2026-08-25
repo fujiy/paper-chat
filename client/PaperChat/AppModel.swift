@@ -970,7 +970,20 @@ final class AppModel: ObservableObject {
     }
 
     private func report(_ error: Error) {
-        if let apiError = error as? APIError, apiError.isTransient {
+        if Self.isCancellation(error) {
+            return
+        }
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .timedOut:
+                errorMessage = "The request timed out. Check the PaperChat server and try again."
+            case .notConnectedToInternet, .networkConnectionLost:
+                errorMessage = "The network connection is unavailable. Check your connection and try again."
+            case .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed:
+                errorMessage = "PaperChat could not reach the server. Check the server address and connection."
+            default:
+                errorMessage = "A network error occurred. Please try again."
+            }
             return
         }
         errorMessage = error.localizedDescription

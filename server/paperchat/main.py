@@ -7,8 +7,8 @@ from itertools import count
 from typing import Annotated, Literal
 
 import uvicorn
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
-from fastapi.responses import StreamingResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .auth import (
@@ -21,7 +21,7 @@ from .auth import (
 )
 from .config import load_settings
 from .db import as_dict, connect, init, new_id, now
-from .library import ZoteroLibrary
+from .library import ZoteroLibrary, ZoteroLibraryError
 from .llm import backend
 
 
@@ -87,6 +87,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="PaperChat", version="0.1.0", lifespan=lifespan)
 Session = Annotated[dict[str, object], Depends(current_session)]
 SearchQuery = Annotated[str, Query(min_length=1)]
+
+
+@app.exception_handler(ZoteroLibraryError)
+async def zotero_library_error(_: Request, error: ZoteroLibraryError) -> JSONResponse:
+    return JSONResponse(status_code=error.status_code, content={"error": error.code})
 
 
 class ResolvePaperRequest(BaseModel):

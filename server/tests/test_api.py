@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 from paperchat.config import Settings, load_settings
 from paperchat.db import connect, now
+from paperchat.library import ZoteroLibraryError
 from paperchat.main import ThreadEventBroker, app
 
 
@@ -142,6 +143,22 @@ def test_auth_refresh_rotates_session(tmp_path, monkeypatch):
     assert refreshed.status_code == 200
     assert refreshed.json()["refresh_token"] != tokens["refresh_token"]
     assert reused.status_code == 401
+
+
+def test_zotero_library_error_is_returned_as_stable_api_error(tmp_path, monkeypatch):
+    with client_for(tmp_path, monkeypatch) as client:
+        headers = {"Authorization": f"Bearer {register(client)['access_token']}"}
+
+        async def unavailable(self, attachment_key):
+            raise ZoteroLibraryError("zotero_unavailable", 502)
+
+        monkeypatch.setattr("paperchat.library.ZoteroLibrary.metadata", unavailable)
+        response = client.post(
+            "/api/papers/resolve", json={"attachment_key": "ATT1"}, headers=headers
+        )
+
+    assert response.status_code == 502
+    assert response.json() == {"error": "zotero_unavailable"}
 
 
 def test_paper_thread_reading_state_and_streaming_chat(tmp_path, monkeypatch):

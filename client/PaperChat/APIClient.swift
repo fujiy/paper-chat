@@ -428,10 +428,13 @@ actor APIClient {
     private static let transientStatusCodes: Set<Int> = [502, 503, 504]
 
     private static func errorDetail(data: Data, response: HTTPURLResponse) -> String {
-        if let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let detail = payload["detail"] as? String,
-           !detail.isEmpty {
-            return detail
+        if let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let error = payload["error"] as? String, !error.isEmpty {
+                return error
+            }
+            if let detail = payload["detail"] as? String, !detail.isEmpty {
+                return detail
+            }
         }
         let body = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -485,12 +488,18 @@ enum APIError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .invalidURL: "Invalid server URL."
-        case .invalidResponse: "The server returned an invalid response."
-        case .unauthorized: "Sign in to continue."
-        case let .http(status): "Request failed (\(status))."
-        case let .server(status, detail): "Server error \(status): \(detail)"
-        case let .decoding(detail): "The server response could not be decoded. \(detail)"
+        case .invalidURL:
+            "The PaperChat server URL is invalid. Check it in the sign-in screen."
+        case .invalidResponse:
+            "PaperChat received an invalid response from the server. Please try again."
+        case .unauthorized:
+            "Your PaperChat session has expired. Please sign in again."
+        case let .http(status):
+            Self.message(status: status, detail: "")
+        case let .server(status, detail):
+            Self.message(status: status, detail: detail)
+        case .decoding:
+            "PaperChat could not read the server response. The app and server may be out of date."
         }
     }
 
@@ -503,16 +512,47 @@ enum APIError: LocalizedError {
         }
     }
 
-    var isTransient: Bool {
-        switch self {
-        case let .http(status), let .server(status, _):
-            Self.transientStatusCodes.contains(status)
+    private static func message(status: Int, detail: String) -> String {
+        switch detail {
+        case "zotero_pdf_processing", "pdf_not_cached":
+            return "This PDF is still being downloaded from Zotero. Please try again in a minute."
+        case "zotero_attachment_not_found", "not_found":
+            return "This Zotero attachment has not reached PaperChat yet. Zotero may still be syncing. Please try again later."
+        case "zotero_auth_failed", "unauthorized":
+            return "PaperChat could not authenticate with the Zotero API. Check the Zotero API credentials on the server."
+        case "zotero_timeout", "zotero_unavailable":
+            return "The Zotero API is temporarily unavailable. Please try again later."
+        case "zotero_pdf_cache_error", "invalid_cache_path":
+            return "PaperChat found the Zotero PDF, but its server cache is invalid. Check the Zotero service logs and try again."
+        case "zotero_request_failed":
+            return "PaperChat could not complete the request to Zotero. Please try again later."
+        case "PDF source not found":
+            return "This paper no longer has a Zotero PDF source. Open it again from Zotero or refresh the library."
         default:
-            false
+            break
+        }
+
+        switch status {
+        case 400:
+            return "The request was not accepted by the server. Check the entered information and try again."
+        case 401:
+            return "Your PaperChat session has expired. Please sign in again."
+        case 403:
+            return "You do not have permission to perform this action."
+        case 404:
+            return "The requested paper or conversation could not be found. Refresh the library and try again."
+        case 409:
+            return detail.isEmpty ? "The request conflicts with an operation already in progress. Please try again shortly." : detail
+        case 422:
+            return "PaperChat could not process the request. Check the entered information and try again."
+        case 502, 503, 504:
+            return "A PaperChat service is temporarily unavailable. Please try again later."
+        case 500...599:
+            return "PaperChat encountered a server problem. Please try again later."
+        default:
+            return "The request failed (\(status)). Please try again."
         }
     }
-
-    private static let transientStatusCodes: Set<Int> = [502, 503, 504]
 }
 
 struct AnyEncodable: Encodable {

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import httpx
 import pytest
 from paperchat.config import Settings
-from paperchat.library import ZoteroLibrary
+from paperchat.library import ZoteroLibrary, ZoteroLibraryError
 
 
 @pytest.mark.asyncio
@@ -67,3 +68,25 @@ async def test_search_adapts_ranked_top_n_to_offset_pagination(tmp_path, monkeyp
     assert result["next_offset"] == 35
     assert result["total"] == sum(range(1, 101))
     assert result["paper_count"] == 100
+
+
+@pytest.mark.parametrize(
+    ("status", "payload", "code", "paperchat_status"),
+    [
+        (404, {"error": "not_found"}, "zotero_attachment_not_found", 404),
+        (409, {"error": "pdf_not_cached"}, "zotero_pdf_processing", 409),
+        (401, {"error": "unauthorized"}, "zotero_auth_failed", 502),
+        (500, {"error": "invalid_cache_path"}, "zotero_pdf_cache_error", 502),
+        (503, {"error": "unavailable"}, "zotero_unavailable", 502),
+        (422, {"error": "invalid_request"}, "zotero_request_failed", 502),
+    ],
+)
+def test_zotero_errors_have_stable_paperchat_codes(
+    status, payload, code, paperchat_status
+):
+    response = httpx.Response(status, json=payload)
+
+    error = ZoteroLibraryError.from_response(response)
+
+    assert error.code == code
+    assert error.status_code == paperchat_status
