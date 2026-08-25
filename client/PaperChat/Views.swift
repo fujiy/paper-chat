@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 #if os(macOS)
 import AppKit
@@ -1237,6 +1238,299 @@ struct ChatPane: View {
     }
 }
 
+private struct StructureHierarchyLabel {
+    let number: String?
+    let title: String
+    let level: Int
+}
+
+private struct DocumentOutlineTreeNode: Identifiable {
+    let node: DocumentOutlineNode
+    let number: String?
+    let title: String
+    let level: Int
+    let children: [DocumentOutlineTreeNode]
+
+    var id: String { node.id }
+}
+
+private final class MutableDocumentOutlineTreeNode {
+    let node: DocumentOutlineNode
+    let number: String?
+    let title: String
+    let level: Int
+    var children: [MutableDocumentOutlineTreeNode] = []
+
+    init(node: DocumentOutlineNode, label: StructureHierarchyLabel) {
+        self.node = node
+        number = label.number
+        title = label.title
+        level = label.level
+    }
+
+    func freeze() -> DocumentOutlineTreeNode {
+        DocumentOutlineTreeNode(
+            node: node,
+            number: number,
+            title: title,
+            level: level,
+            children: children.map { $0.freeze() }
+        )
+    }
+}
+
+private enum StructureHierarchy {
+    private static let decimalHeading = try! NSRegularExpression(
+        pattern: #"^\s*(\d+(?:\.\d+)*)(?:[.)])?\s+(.+?)\s*$"#
+    )
+    private static let namedHeading = try! NSRegularExpression(
+        pattern: #"^\s*([IVXLCDM]+|[A-Z])[.)]\s+(.+?)\s*$"#
+    )
+    private static let artifactPrefix = try! NSRegularExpression(
+        pattern: #"(?i)^\s*(?:fig(?:ure)?\.?|table|equation|eq\.?)\s*\(?([0-9]+(?:\.[0-9]+)*(?:[a-z])?)\)?[.:]?\s*(.*?)\s*$"#
+    )
+    private static let bareArtifactNumber = try! NSRegularExpression(
+        pattern: #"^\s*\(?([0-9]+(?:\.\d+)*(?:[a-z])?)\)?[.:]?\s*$"#
+    )
+    private static let artifactMention = try! NSRegularExpression(
+        pattern: #"(?i)\b(?:fig(?:ure)?\.?|table|equation|eq\.?)\s*\(?([0-9]+(?:\.[0-9]+)*(?:[a-z])?)\)?"#
+    )
+    private static let trailingArtifactNumber = try! NSRegularExpression(
+        pattern: #"\(([0-9]+(?:\.[0-9]+)*(?:[a-z])?)\)\s*$"#
+    )
+    private static let parenthesizedHierarchyNumber = try! NSRegularExpression(
+        pattern: #"\(([0-9]+(?:\.[0-9]+)+(?:[a-z])?)\)"#
+    )
+    private static let subordinateHeading = try! NSRegularExpression(
+        pattern: #"(?i)^\s*(?:corollary|lemma|proposition|theorem)\b"#
+    )
+
+    static func outlineTree(_ nodes: [DocumentOutlineNode]) -> [DocumentOutlineTreeNode] {
+        var roots: [MutableDocumentOutlineTreeNode] = []
+        var stack: [MutableDocumentOutlineTreeNode] = []
+
+        for node in nodes {
+            var label = heading(node)
+            if node.parentID == nil,
+               node.level <= 1,
+               label.number == nil,
+               matches(subordinateHeading, in: node.title),
+               let previous = stack.last {
+                label = StructureHierarchyLabel(
+                    number: nil,
+                    title: label.title,
+                    level: min(previous.level + 1, 4)
+                )
+            }
+
+            let effectiveLevel = min(label.level, (stack.last?.level ?? 0) + 1)
+            let adjusted = StructureHierarchyLabel(
+                number: label.number,
+                title: label.title,
+                level: max(1, effectiveLevel)
+            )
+            let item = MutableDocumentOutlineTreeNode(node: node, label: adjusted)
+
+            while let last = stack.last, last.level >= adjusted.level {
+                stack.removeLast()
+            }
+            if let explicitParent = node.parentID,
+               let parentIndex = stack.lastIndex(where: { $0.node.id == explicitParent }) {
+                stack[parentIndex].children.append(item)
+                stack.removeSubrange((parentIndex + 1)..<stack.endIndex)
+            } else if let parent = stack.last {
+                parent.children.append(item)
+            } else {
+                roots.append(item)
+            }
+            stack.append(item)
+        }
+        return roots.map { $0.freeze() }
+    }
+
+    static func artifact(_ item: DocumentObject) -> StructureHierarchyLabel {
+        let candidates: [String]
+        if item.kind == "formula" {
+            candidates = [item.label, item.text].compactMap { $0 }.filter { !$0.isEmpty }
+        } else {
+            candidates = [item.label, item.title, item.caption, item.text]
+                .compactMap { $0 }
+                .filter { !$0.isEmpty }
+        }
+        var number: String?
+        var title = item.title
+
+        for candidate in candidates {
+            if let groups = captures(artifactPrefix, in: candidate) {
+                number = groups[0]
+                if candidate == item.title, groups.count > 1, !groups[1].isEmpty {
+                    title = groups[1]
+                }
+                break
+            }
+            if let groups = captures(bareArtifactNumber, in: candidate) {
+                number = groups[0]
+                break
+            }
+            if let groups = captures(artifactMention, in: candidate) {
+                number = groups[0]
+                break
+            }
+            if let groups = captures(trailingArtifactNumber, in: candidate) {
+                number = groups[0]
+                break
+            }
+            if let groups = captures(parenthesizedHierarchyNumber, in: candidate) {
+                number = groups[0]
+                break
+            }
+        }
+
+        if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || title == item.label
+            || title.range(of: #"(?i)^\s*(?:fig(?:ure)?\.?|table|equation|eq\.?)\s*\(?[0-9]+(?:\.[0-9]+)*(?:[a-z])?\)?[.:]?\s*$"#, options: .regularExpression) != nil {
+            title = item.kind == "table" ? "Table" : item.kind == "formula" ? "Equation" : "Figure"
+        }
+
+        return StructureHierarchyLabel(
+            number: number,
+            title: title,
+            level: hierarchyLevel(number)
+        )
+    }
+
+    private static func heading(_ node: DocumentOutlineNode) -> StructureHierarchyLabel {
+        if let groups = captures(decimalHeading, in: node.title) {
+            return StructureHierarchyLabel(
+                number: groups[0],
+                title: groups[1],
+                level: node.level > 1 ? node.level : hierarchyLevel(groups[0])
+            )
+        }
+        if let groups = captures(namedHeading, in: node.title) {
+            let token = groups[0]
+            let inferredLevel = token.count == 1 && !["I", "V", "X"].contains(token) ? 2 : 1
+            return StructureHierarchyLabel(
+                number: token,
+                title: groups[1],
+                level: node.level > 1 ? node.level : inferredLevel
+            )
+        }
+        return StructureHierarchyLabel(number: nil, title: node.title, level: max(1, node.level))
+    }
+
+    private static func hierarchyLevel(_ number: String?) -> Int {
+        guard let number else { return 1 }
+        return max(1, number.split(separator: ".").count)
+    }
+
+    private static func matches(_ expression: NSRegularExpression, in text: String) -> Bool {
+        expression.firstMatch(
+            in: text,
+            range: NSRange(text.startIndex..., in: text)
+        ) != nil
+    }
+
+    private static func captures(
+        _ expression: NSRegularExpression,
+        in text: String
+    ) -> [String]? {
+        guard let match = expression.firstMatch(
+            in: text,
+            range: NSRange(text.startIndex..., in: text)
+        ) else { return nil }
+        return (1..<match.numberOfRanges).compactMap { index in
+            guard let range = Range(match.range(at: index), in: text) else { return nil }
+            return String(text[range])
+        }
+    }
+}
+
+private struct DocumentOutlineBranchView: View {
+    let item: DocumentOutlineTreeNode
+    let subtitle: String
+    let action: (DocumentOutlineNode) -> Void
+    @State private var isExpanded = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .top, spacing: 4) {
+                expansionControl
+                row
+            }
+
+            if isExpanded, !item.children.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(item.children) { child in
+                        DocumentOutlineBranchView(
+                            item: child,
+                            subtitle: child.node.anchor.map { "Page \($0.pageIndex + 1)" }
+                                ?? "Location unavailable",
+                            action: action
+                        )
+                    }
+                }
+                .padding(.leading, 20)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var expansionControl: some View {
+        if item.children.isEmpty {
+            Color.clear
+                .frame(width: 32, height: 32)
+                .accessibilityHidden(true)
+        } else {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .frame(width: 32, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(isExpanded ? "Collapse section" : "Expand section")
+            .accessibilityLabel(isExpanded ? "Collapse \(item.title)" : "Expand \(item.title)")
+        }
+    }
+
+    private var row: some View {
+        Button { action(item.node) } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                hierarchyNumber(item.number)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.title).font(.callout.weight(.medium)).lineLimit(3)
+                    Text(subtitle).font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func hierarchyNumber(_ number: String?) -> some View {
+        if let number {
+            Text(number)
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 28, alignment: .trailing)
+        } else {
+            Image(systemName: "text.alignleft")
+                .foregroundStyle(.tertiary)
+                .frame(width: 28)
+        }
+    }
+}
+
 struct StructureNavigationView: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var session: PaperSession
@@ -1291,38 +1585,59 @@ struct StructureNavigationView: View {
         } else {
             switch session.structureSection {
             case .outline:
-                itemList(structure.outline) { node in
-                    structureRow(
-                        title: node.title,
-                        subtitle: pageLabel(node.anchor),
-                        icon: "text.alignleft",
-                        indentation: max(0, node.level - 1)
-                    ) {
-                        model.openStructureAnchor(node.anchor, in: session)
-                    }
-                }
+                outlineList(structure.outline)
             case .figures:
                 itemList(structure.figures) { item in
+                    let hierarchy = StructureHierarchy.artifact(item)
                     structureRow(
-                        title: item.title,
+                        title: hierarchy.title,
                         subtitle: compactSubtitle(item.caption, anchor: item.anchor),
-                        icon: item.kind == "table" ? "tablecells" : "photo"
+                        icon: item.kind == "table" ? "tablecells" : "photo",
+                        number: hierarchy.number,
+                        indentation: max(0, hierarchy.level - 1)
                     ) {
                         model.openStructureAnchor(item.anchor, in: session)
                     }
                 }
             case .equations:
                 itemList(structure.formulas) { item in
+                    let hierarchy = StructureHierarchy.artifact(item)
                     structureRow(
-                        title: item.title,
+                        title: hierarchy.title,
                         subtitle: compactSubtitle(item.text, anchor: item.anchor),
-                        icon: "function"
+                        icon: "function",
+                        number: hierarchy.number,
+                        indentation: max(0, hierarchy.level - 1)
                     ) {
                         model.openStructureAnchor(item.anchor, in: session)
                     }
                 }
             case .references:
                 referenceList(structure.references)
+            }
+        }
+    }
+
+    private func outlineList(_ outline: [DocumentOutlineNode]) -> some View {
+        Group {
+            if outline.isEmpty {
+                ContentUnavailableView("No Items Found", systemImage: "list.bullet")
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(StructureHierarchy.outlineTree(outline)) { item in
+                            DocumentOutlineBranchView(
+                                item: item,
+                                subtitle: pageLabel(item.node.anchor)
+                            ) { node in
+                                model.openStructureAnchor(node.anchor, in: session)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 10)
+                    .padding(.leading, 16)
+                    .padding(.trailing, 10)
+                }
             }
         }
     }
@@ -1400,14 +1715,22 @@ struct StructureNavigationView: View {
         title: String,
         subtitle: String,
         icon: String,
+        number: String? = nil,
         indentation: Int = 0,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             HStack(alignment: .top, spacing: 9) {
-                Image(systemName: icon)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 18)
+                if let number {
+                    Text(number)
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 32, alignment: .trailing)
+                } else {
+                    Image(systemName: icon)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32)
+                }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).font(.callout.weight(.medium)).lineLimit(3)
                     if !subtitle.isEmpty {
