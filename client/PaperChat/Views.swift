@@ -1,5 +1,8 @@
 import Foundation
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 #if os(macOS)
 import AppKit
 #endif
@@ -932,13 +935,31 @@ struct ReaderWorkspace: View {
     @ObservedObject var session: PaperSession
     let isActive: Bool
     @Binding var isImmersive: Bool
+    #if os(iOS)
+    @State private var ignoresKeyboardSafeArea = false
+    #endif
 
     @ViewBuilder
     var body: some View {
         if isActive {
             pdfPane
+                #if os(iOS)
+                .ignoresSafeArea(
+                    ignoresKeyboardSafeArea ? .keyboard : [],
+                    edges: .bottom
+                )
+                #endif
                 .inspector(isPresented: inspectorPresented) {
-                    ChatPane(session: session)
+                    Group {
+                        #if os(iOS)
+                        InspectorChatPane(
+                            session: session,
+                            ignoresKeyboardSafeArea: $ignoresKeyboardSafeArea
+                        )
+                        #else
+                        InspectorChatPane(session: session)
+                        #endif
+                    }
                         .inspectorColumnWidth(min: 320, ideal: 390, max: 520)
                         #if os(iOS)
                         .presentationDetents([.medium, .large])
@@ -968,6 +989,230 @@ struct ReaderWorkspace: View {
         )
     }
 }
+
+private struct InspectorChatPane: View {
+    let session: PaperSession
+    #if os(iOS)
+    @Binding var ignoresKeyboardSafeArea: Bool
+    @State private var keyboardIsHiding = false
+    #endif
+
+    var body: some View {
+        #if os(iOS)
+        ChatPane(session: session)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background {
+                WindowKeyboardLayoutMonitor { isUndocked in
+                    guard !keyboardIsHiding else { return }
+                    ignoresKeyboardSafeArea = isUndocked
+                }
+            }
+            .ignoresSafeArea(
+                ignoresKeyboardSafeArea ? .keyboard : [],
+                edges: .bottom
+            )
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: UIResponder.keyboardWillShowNotification
+                )
+            ) { notification in
+                keyboardIsHiding = false
+                updateKeyboardSafeArea(from: notification)
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: UIResponder.keyboardDidShowNotification
+                )
+            ) { notification in
+                updateKeyboardSafeArea(from: notification)
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: UIResponder.keyboardDidChangeFrameNotification
+                )
+            ) { notification in
+                guard !keyboardIsHiding else { return }
+                updateKeyboardSafeArea(from: notification)
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: UIResponder.keyboardWillHideNotification
+                )
+            ) { _ in
+                keyboardIsHiding = true
+                ignoresKeyboardSafeArea = false
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: UIResponder.keyboardDidHideNotification
+                )
+            ) { _ in
+                keyboardIsHiding = false
+                ignoresKeyboardSafeArea = false
+            }
+        #else
+        ChatPane(session: session)
+        #endif
+    }
+
+    #if os(iOS)
+    private func updateKeyboardSafeArea(from notification: Notification) {
+        guard let screenFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey]
+            as? CGRect else { return }
+
+        // When iPadOS restores an already-floating keyboard, it reports the
+        // docked keyboard as dismissed (a zero-height frame) even though the
+        // floating keyboard remains visible. SwiftUI nevertheless retains the
+        // old docked keyboard safe area, so it must be ignored in this case.
+        if screenFrame.height <= 1 {
+            ignoresKeyboardSafeArea = true
+            return
+        }
+
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow) else { return }
+        let frame = window.convert(screenFrame, from: nil)
+        let intersection = window.bounds.intersection(frame)
+        guard !intersection.isNull, !intersection.isEmpty else { return }
+
+        let isDocked = frame.maxY >= window.bounds.maxY - 1
+            && intersection.width >= window.bounds.width - 1
+        ignoresKeyboardSafeArea = !isDocked
+    }
+    #endif
+}
+
+#if os(iOS)
+private struct WindowKeyboardLayoutMonitor: UIViewRepresentable {
+    let onChange: @MainActor (Bool) -> Void
+
+    func makeUIView(context: Context) -> KeyboardLayoutMonitorInstallerView {
+        let view = KeyboardLayoutMonitorInstallerView()
+        view.onChange = onChange
+        return view
+    }
+
+    func updateUIView(
+        _ uiView: KeyboardLayoutMonitorInstallerView,
+        context: Context
+    ) {
+        uiView.onChange = onChange
+    }
+
+    static func dismantleUIView(
+        _ uiView: KeyboardLayoutMonitorInstallerView,
+        coordinator: Void
+    ) {
+        uiView.removeTrackingView()
+    }
+}
+
+@MainActor
+private final class KeyboardLayoutMonitorInstallerView: UIView, UIGestureRecognizerDelegate {
+    var onChange: (@MainActor (Bool) -> Void)?
+    private weak var trackingContainer: KeyboardTrackingContainer?
+    private weak var tapRecognizer: UITapGestureRecognizer?
+    private weak var gestureHostView: UIView?
+    private var lastValue: Bool?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        installTrackingView()
+    }
+
+    func removeTrackingView() {
+        trackingContainer?.removeFromSuperview()
+        if let tapRecognizer {
+            gestureHostView?.removeGestureRecognizer(tapRecognizer)
+        }
+    }
+
+    private func installTrackingView() {
+        removeTrackingView()
+        guard let window else { return }
+
+        let container = KeyboardTrackingContainer()
+        container.isUserInteractionEnabled = false
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.onLayout = { [weak self, weak window] frame in
+            guard let self, let window else { return }
+            let isUndocked = !frame.isEmpty && frame.width < window.bounds.width - 1
+            guard isUndocked != self.lastValue else { return }
+            self.lastValue = isUndocked
+            self.onChange?(isUndocked)
+        }
+        window.insertSubview(container, at: 0)
+        NSLayoutConstraint.activate([
+            container.topAnchor.constraint(equalTo: window.topAnchor),
+            container.leadingAnchor.constraint(equalTo: window.leadingAnchor),
+            container.trailingAnchor.constraint(equalTo: window.trailingAnchor),
+            container.bottomAnchor.constraint(equalTo: window.bottomAnchor),
+        ])
+        trackingContainer = container
+
+        let tapRecognizer = UITapGestureRecognizer(
+            target: self,
+            action: #selector(dismissKeyboard)
+        )
+        tapRecognizer.cancelsTouchesInView = false
+        tapRecognizer.delegate = self
+        window.addGestureRecognizer(tapRecognizer)
+        self.tapRecognizer = tapRecognizer
+        gestureHostView = window
+    }
+
+    @objc private func dismissKeyboard() {
+        window?.endEditing(true)
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldReceive touch: UITouch
+    ) -> Bool {
+        var touchedView = touch.view
+        while let view = touchedView {
+            if view is UITextView || view is UITextField {
+                return false
+            }
+            touchedView = view.superview
+        }
+        return true
+    }
+}
+
+@MainActor
+private final class KeyboardTrackingContainer: UIView {
+    var onLayout: (@MainActor (CGRect) -> Void)?
+    private let trackingView = UIView()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        keyboardLayoutGuide.followsUndockedKeyboard = true
+        trackingView.backgroundColor = .clear
+        trackingView.isUserInteractionEnabled = false
+        trackingView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(trackingView)
+        NSLayoutConstraint.activate([
+            trackingView.topAnchor.constraint(equalTo: keyboardLayoutGuide.topAnchor),
+            trackingView.leadingAnchor.constraint(equalTo: keyboardLayoutGuide.leadingAnchor),
+            trackingView.trailingAnchor.constraint(equalTo: keyboardLayoutGuide.trailingAnchor),
+            trackingView.bottomAnchor.constraint(equalTo: keyboardLayoutGuide.bottomAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        onLayout?(trackingView.frame)
+    }
+}
+#endif
 
 struct PDFPane: View {
     @EnvironmentObject private var model: AppModel
