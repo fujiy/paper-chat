@@ -340,6 +340,10 @@ final class AppModel: ObservableObject {
             errorMessage = "This PDF is not a Zotero storage attachment."
             return
         }
+        guard PDFDocument(url: url) != nil else {
+            errorMessage = "Zotero did not provide a readable PDF."
+            return
+        }
 
         // A document-open event can arrive before the window's startup task.
         // Restore the saved session here as well so a cold launch can resolve it.
@@ -352,7 +356,16 @@ final class AppModel: ObservableObject {
         }
 
         await perform {
-            let paper = try await client.resolve(attachmentKey: attachmentKey)
+            let paper: Paper
+            do {
+                paper = try await client.resolve(attachmentKey: attachmentKey)
+            } catch let error as APIError where error.isZoteroAttachmentNotFound {
+                paper = try await client.resolveLocal(
+                    attachmentKey: attachmentKey,
+                    filename: url.lastPathComponent
+                )
+            }
+            _ = try await PDFCache.shared.storeLocalFile(at: url, paperID: paper.id)
             _ = try await openPaper(paper, fromSidebar: false)
         }
     }

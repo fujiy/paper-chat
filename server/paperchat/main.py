@@ -98,6 +98,11 @@ class ResolvePaperRequest(BaseModel):
     attachment_key: str = Field(min_length=1, max_length=64)
 
 
+class ResolveLocalPaperRequest(BaseModel):
+    attachment_key: str = Field(pattern=r"^[A-Z0-9]{8}$")
+    filename: str = Field(min_length=1, max_length=500)
+
+
 class ThreadRequest(BaseModel):
     title: str = Field(default="Main", min_length=1, max_length=200)
 
@@ -217,13 +222,38 @@ async def list_models(_: Session, settings: SettingsDependency):
 @app.post("/api/papers/resolve")
 async def resolve_paper(
     payload: ResolvePaperRequest,
-    _: Session,
+    session: Session,
     settings: SettingsDependency,
 ):
     metadata = await ZoteroLibrary(settings).metadata(payload.attachment_key)
+    return resolve_paper_record(metadata, str(session["device_id"]), settings)
+
+
+@app.post("/api/papers/resolve-local")
+def resolve_local_paper(
+    payload: ResolveLocalPaperRequest,
+    session: Session,
+    settings: SettingsDependency,
+):
+    """Create a temporary paper record before a new Zotero attachment has synced."""
+    return resolve_paper_record(
+        {
+            "attachment_key": payload.attachment_key,
+            "filename": payload.filename,
+            "title": payload.filename.removesuffix(".pdf") or payload.filename,
+            "creators": [],
+            "library_type": "",
+            "library_id": "",
+        },
+        str(session["device_id"]),
+        settings,
+    )
+
+
+def resolve_paper_record(metadata: dict, device_id: str, settings) -> dict:
     identifier = (
         "zotero",
-        metadata.get("library_type"),
+        metadata.get("library_type") or "",
         str(metadata.get("library_id") or ""),
         metadata["attachment_key"],
     )
@@ -236,6 +266,27 @@ async def resolve_paper(
             """,
             identifier,
         ).fetchone()
+        if not row and (identifier[1] or identifier[2]):
+            # A Mac can open a just-created Zotero attachment before the server's
+            # library sync sees it. Adopt that explicitly local placeholder once
+            # the authoritative library identity becomes available.
+            row = conn.execute(
+                """
+                SELECT p.* FROM papers p JOIN paper_identifiers i ON i.paper_id = p.id
+                WHERE i.kind = 'zotero' AND i.library_type = '' AND i.library_id = ''
+                  AND i.value = ?
+                """,
+                (identifier[3],),
+            ).fetchone()
+            if row:
+                conn.execute(
+                    """
+                    UPDATE paper_identifiers SET library_type = ?, library_id = ?
+                    WHERE paper_id = ? AND kind = 'zotero'
+                      AND library_type = '' AND library_id = '' AND value = ?
+                    """,
+                    (identifier[1], identifier[2], row["id"], identifier[3]),
+                )
         if row:
             paper_id = row["id"]
             conn.execute(
@@ -291,7 +342,7 @@ async def resolve_paper(
                     timestamp,
                 ),
             )
-        result = paper_detail(conn, paper_id, str(_["device_id"]))
+        result = paper_detail(conn, paper_id, device_id)
     return result
 
 

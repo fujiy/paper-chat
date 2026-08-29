@@ -73,6 +73,14 @@ actor APIClient {
         )
     }
 
+    func resolveLocal(attachmentKey: String, filename: String) async throws -> Paper {
+        try await request(
+            "api/papers/resolve-local",
+            method: "POST",
+            body: ["attachment_key": attachmentKey, "filename": filename]
+        )
+    }
+
     func paper(id: String) async throws -> Paper {
         try await request("api/papers/\(id)")
     }
@@ -510,6 +518,13 @@ enum APIError: LocalizedError {
         default:
             false
         }
+    }
+
+    var isZoteroAttachmentNotFound: Bool {
+        if case .server(404, "zotero_attachment_not_found") = self {
+            return true
+        }
+        return false
     }
 
     private static func message(status: Int, detail: String) -> String {

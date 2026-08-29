@@ -26,9 +26,13 @@ actor PDFCache {
         return url
     }
 
+    func storeLocalFile(at sourceURL: URL, paperID: String) throws -> URL {
+        let data = try Data(contentsOf: sourceURL, options: .mappedIfSafe)
+        return try store(data, paperID: paperID, etag: nil)
+    }
+
     private func documentURL(paperID: String) -> URL {
         root.appending(path: paperID, directoryHint: .isDirectory)
             .appending(path: "document.pdf")
     }
 }
-

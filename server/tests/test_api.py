@@ -161,6 +161,48 @@ def test_zotero_library_error_is_returned_as_stable_api_error(tmp_path, monkeypa
     assert response.json() == {"error": "zotero_unavailable"}
 
 
+def test_local_zotero_open_is_adopted_after_library_sync(tmp_path, monkeypatch):
+    with client_for(tmp_path, monkeypatch) as client:
+        headers = {"Authorization": f"Bearer {register(client)['access_token']}"}
+        local = client.post(
+            "/api/papers/resolve-local",
+            json={"attachment_key": "ABCDEFGH", "filename": "new-paper.pdf"},
+            headers=headers,
+        )
+        synced = client.post(
+            "/api/papers/resolve",
+            json={"attachment_key": "ABCDEFGH"},
+            headers=headers,
+        )
+
+    assert local.status_code == 200
+    assert local.json()["title"] == "new-paper"
+    assert local.json()["identifiers"] == [
+        {"kind": "zotero", "library_type": "", "library_id": "", "value": "ABCDEFGH"}
+    ]
+    assert synced.status_code == 200
+    assert synced.json()["id"] == local.json()["id"]
+    assert synced.json()["title"] == "Test Paper"
+    assert synced.json()["identifiers"][0] == {
+        "kind": "zotero",
+        "library_type": "user",
+        "library_id": "123",
+        "value": "ABCDEFGH",
+    }
+
+
+def test_local_zotero_open_rejects_invalid_attachment_key(tmp_path, monkeypatch):
+    with client_for(tmp_path, monkeypatch) as client:
+        headers = {"Authorization": f"Bearer {register(client)['access_token']}"}
+        response = client.post(
+            "/api/papers/resolve-local",
+            json={"attachment_key": "../unsafe", "filename": "paper.pdf"},
+            headers=headers,
+        )
+
+    assert response.status_code == 422
+
+
 def test_paper_thread_reading_state_and_streaming_chat(tmp_path, monkeypatch):
     with client_for(tmp_path, monkeypatch) as client:
         tokens = register(client)
