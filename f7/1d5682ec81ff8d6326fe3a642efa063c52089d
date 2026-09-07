@@ -1,0 +1,33 @@
+README.md
+  s_0b4a40f713e2e9::t_d70ce79c0f4df0 82-109
+initial_design.md
+  s_0b4a40f713e2e9::t_e6a1c987f14984 47,90,92,94,103,111-113,136,185,192,227,338,341,402,450,469,530,553,567,602,604,623-624,626,649-650,720,749,766-767,774,780
+scripts/deploy-home.sh
+  s_0b4a40f713e2e9::t_e6a1c987f14984 5-7,97-98
+compose.yaml
+  s_0b4a40f713e2e9::t_e6a1c987f14984 66-67,99-100,114-115,140,159-160
+.dockerignore
+  s_0b4a40f713e2e9::t_e6a1c987f14984 10-12
+README_JP.md
+  s_0b4a40f713e2e9::t_e6a1c987f14984 13,42
+.gitmodules
+  s_0b4a40f713e2e9::t_b03126569a25a3 1-3
+services/zotero-search
+  s_0b4a40f713e2e9::t_10786df29bd3b2 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "f71d5682ec81ff8d6326fe3a642efa063c52089d",
+  "prompts": {},
+  "sessions": {
+    "s_0b4a40f713e2e9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07a9b-65fb-75a1-a368-dd6da635c594",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Yuki Fujihara <mail@fujiy.dev>"
+    }
+  }
+}
