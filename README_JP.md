@@ -73,9 +73,9 @@ PAPERCHAT_PUBLIC_BASE_URL=http://server.local:8001 \
 
 ```sh
 docker exec -it -e CODEX_HOME=/data/codex/home \
-  paperchat-paperchat-api-1 codex login --device-auth
+  paperchat-codex-runner-1 codex login --device-auth
 docker exec -e CODEX_HOME=/data/codex/home \
-  paperchat-paperchat-api-1 codex login status
+  paperchat-codex-runner-1 codex login status
 ```
 
 認証後、`LLM_BACKEND=codex`でPaperChat APIを再作成します。通常のE2E検証だけなら`LLM_BACKEND=fake`を使用できます。
@@ -85,7 +85,7 @@ docker exec -e CODEX_HOME=/data/codex/home \
 実論文の本文を送らずに、Codex接続・ストリーミング・thread再開だけを確認できます。
 
 ```sh
-docker exec -i paperchat-paperchat-api-1 /app/.venv/bin/python - \
+docker exec -i paperchat-codex-runner-1 /app/.venv/bin/python - \
   < scripts/codex-smoke-test.py
 
 docker exec -i paperchat-paperchat-api-1 /app/.venv/bin/python - \
@@ -114,3 +114,5 @@ docker exec -i paperchat-paperchat-api-1 \
 ```
 
 検索、論文解決、PDF Range、閲覧位置、SSEチャット、履歴永続化、refresh tokenローテーションを検証します。
+
+管理チャットとCodex専用コンテナの構成・移行手順は、[READMEの該当節](README.md#management-chats-and-the-codex-runner)を参照してください。ChatsからNew Management Chatを選ぶと、論文に紐づかない会話を開始できます。

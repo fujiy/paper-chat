@@ -5,8 +5,6 @@ services:
     build:
       context: .
       target: runtime
-      args:
-        CODEX_VERSION: ${CODEX_VERSION:-0.145.0}
     restart: unless-stopped
     environment:
       DATA_DIR: /data
@@ -14,20 +12,49 @@ services:
       BOOTSTRAP_TOKEN_FILE: /run/secrets/paperchat_bootstrap_token
       ZOTERO_LIBRARY_URL: http://zotero-library-app:8000
       ZOTERO_SERVICE_TOKEN_FILE: /run/secrets/zotero_service_token
-      ZOTERO_MCP_TOKEN_FILE: /run/secrets/zotero_mcp_token
+      CODEX_RUNNER_URL: http://codex-runner:8000
+      CODEX_RUNNER_TOKEN_FILE: /run/secrets/codex_runner_token
       LLM_BACKEND: ${LLM_BACKEND:-codex}
-      CODEX_HOME_DIR: /data/codex/home
-      CODEX_HOME: /data/codex/home
-      CODEX_WORKSPACE: /data/codex/workspace
-      CODEX_MODEL: ${CODEX_MODEL:-}
     volumes:
       - paperchat_data:/data
       - paperchat_secrets:/run/secrets:ro
     ports:
       - "${PAPERCHAT_BIND_ADDRESS:-127.0.0.1}:${PAPERCHAT_HTTP_PORT:-8001}:8000"
     depends_on:
+      codex-runner:
+        condition: service_healthy
       zotero-library-app:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  codex-runner:
+    build:
+      context: .
+      target: runner
+      args:
+        CODEX_VERSION: ${CODEX_VERSION:-0.145.0}
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 512
+    tmpfs: [/tmp]
+    environment:
+      CODEX_HOME_DIR: /data/codex/home
+      CODEX_HOME: /data/codex/home
+      CODEX_WORKSPACE: /data/codex/workspace
+      CODEX_MODEL: ${CODEX_MODEL:-}
+      CODEX_LEGACY_LANDLOCK: ${CODEX_LEGACY_LANDLOCK:-true}
+      CODEX_RUNNER_TOKEN_FILE: /run/secrets/codex_runner_token
+      ZOTERO_MCP_URL: http://zotero-library-app:8000/mcp
+      ZOTERO_MCP_TOKEN_FILE: /run/secrets/zotero_mcp_token
+    volumes:
+      - codex_data:/data/codex
+      - codex_secrets:/run/secrets:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
       interval: 10s
@@ -40,6 +67,7 @@ services:
     command: zotero-mcp
     restart: unless-stopped
     environment: &zotero-environment
+      ZOTERO_API_KEY: ${ZOTERO_API_KEY:-}
       ZOTERO_LIBRARY_TYPE: ${ZOTERO_LIBRARY_TYPE:-user}
       ZOTERO_LIBRARY_ID: ${ZOTERO_LIBRARY_ID:-}
       PUBLIC_BASE_URL: ${ZOTERO_PUBLIC_BASE_URL:-${PUBLIC_BASE_URL:-http://localhost:8000}}
@@ -156,6 +184,12 @@ services:
         condition: service_healthy
 
 volumes:
+  codex_data:
+    external: true
+    name: ${CODEX_DATA_VOLUME:-paperchat_codex_data}
+  codex_secrets:
+    external: true
+    name: ${CODEX_SECRETS_VOLUME:-paperchat_codex_secrets}
   paperchat_data:
   paperchat_secrets:
     external: true

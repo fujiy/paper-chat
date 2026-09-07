@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     zotero_mcp_token: SecretStr | None = Field(default=None, alias="ZOTERO_MCP_TOKEN")
     zotero_mcp_token_file: Path | None = Field(default=None, alias="ZOTERO_MCP_TOKEN_FILE")
     llm_backend: Literal["fake", "codex"] = Field(default="fake", alias="LLM_BACKEND")
+    codex_runner_url: str | None = Field(default=None, alias="CODEX_RUNNER_URL")
+    codex_runner_token: SecretStr | None = Field(default=None, alias="CODEX_RUNNER_TOKEN")
+    codex_runner_token_file: Path | None = Field(default=None, alias="CODEX_RUNNER_TOKEN_FILE")
+    codex_legacy_landlock: bool = Field(default=False, alias="CODEX_LEGACY_LANDLOCK")
     codex_command: str = Field(default="codex", alias="CODEX_COMMAND")
     codex_home: Path = Field(default=Path("/data/codex/home"), alias="CODEX_HOME_DIR")
     codex_workspace: Path = Field(default=Path("/data/codex/workspace"), alias="CODEX_WORKSPACE")
@@ -62,10 +66,15 @@ class Settings(BaseSettings):
     def resolved_zotero_mcp_url(self) -> str:
         return self.zotero_mcp_url or f"{self.zotero_library_url.rstrip('/')}/mcp"
 
+    @property
+    def resolved_runner_token(self) -> str | None:
+        return self.secret(self.codex_runner_token, self.codex_runner_token_file)
+
     def ensure_dirs(self) -> None:
         self.resolved_database_path.parent.mkdir(parents=True, exist_ok=True)
-        self.codex_home.mkdir(parents=True, exist_ok=True)
-        self.codex_workspace.mkdir(parents=True, exist_ok=True)
+        if not self.codex_runner_url:
+            self.codex_home.mkdir(parents=True, exist_ok=True)
+            self.codex_workspace.mkdir(parents=True, exist_ok=True)
 
 
 def load_settings() -> Settings:

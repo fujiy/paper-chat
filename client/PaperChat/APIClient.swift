@@ -44,7 +44,7 @@ actor APIClient {
     }
 
     func chats() async throws -> [ChatOverview] {
-        try await request("api/chats")
+        try await request("api/chats?include_management=true")
     }
 
     func search(_ query: String, limit: Int, offset: Int) async throws -> LibrarySearchResponse {
@@ -160,6 +160,14 @@ actor APIClient {
         try await request(
             "api/papers/\(paperID)/threads", method: "POST", body: ["title": title]
         )
+    }
+
+    func createManagementChat(title: String) async throws -> ChatThread {
+        try await request("api/chats", method: "POST", body: ["title": title])
+    }
+
+    func thread(id: String) async throws -> ChatThread {
+        try await request("api/threads/\(id)")
     }
 
     func messages(threadID: String) async throws -> [ChatMessage] {

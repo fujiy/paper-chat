@@ -251,6 +251,12 @@ struct WorkspaceDetail: View {
                 )
             case .chats:
                 ChatsPage()
+            case let .management(id):
+                if let session = model.managementSessions.first(where: { $0.id == id }) {
+                    ConversationView(session: session)
+                        .frame(maxWidth: 960)
+                        .frame(maxWidth: .infinity)
+                }
             case .paper:
                 Color.platformBackground
             }
@@ -394,6 +400,7 @@ struct WorkspaceDetail: View {
         case .recent: return "Recent"
         case .starred: return "Starred"
         case .chats: return "Chats"
+        case .management: return "Management Chat"
         case .paper: return ""
         }
     }
@@ -636,6 +643,10 @@ struct SearchPaperSection: View {
         group.evidence.prefix(isExpanded ? group.evidence.count : 5)
     }
 
+    private var hasOpenablePDF: Bool {
+        group.attachmentKey != nil || group.representative?.usableAttachmentKey != nil
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
@@ -655,14 +666,20 @@ struct SearchPaperSection: View {
                         .lineLimit(1)
                     }
                     Spacer(minLength: 8)
-                    Image(systemName: "arrow.up.right.square")
-                        .foregroundStyle(.secondary)
+                    if hasOpenablePDF {
+                        Image(systemName: "arrow.up.right.square")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Label("PDFなし", systemImage: "doc.badge.minus")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .padding(14)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(group.attachmentKey == nil && group.representative?.usableAttachmentKey == nil)
+            .disabled(!hasOpenablePDF)
 
             Divider()
 
@@ -871,16 +888,25 @@ struct ChatsPage: View {
     private var groups: [(String, [ChatOverview])] {
         Dictionary(grouping: model.chatOverviews, by: \.paperID)
             .values
-            .map { ($0[0].paperTitle, $0) }
+            .map { ($0[0].paperTitle ?? "Management", $0) }
             .sorted { $0.0.localizedCaseInsensitiveCompare($1.0) == .orderedAscending }
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                Button("New Management Chat", systemImage: "square.and.pencil") {
+                    model.beginManagementChat()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding()
         if groups.isEmpty {
             ContentUnavailableView(
                 "No Chats Yet",
                 systemImage: "bubble.left.and.bubble.right",
-                description: Text("Chats you start from a paper will appear here.")
+                description: Text("Start a management chat, or open a paper to discuss it.")
             )
         } else {
             ScrollView {
@@ -927,6 +953,7 @@ struct ChatsPage: View {
                 .frame(maxWidth: 860)
                 .padding(24)
             }
+        }
         }
     }
 }
@@ -2232,7 +2259,7 @@ struct ChatListView: View {
 
 struct ConversationView: View {
     @EnvironmentObject private var model: AppModel
-    @ObservedObject var session: PaperSession
+    @ObservedObject var session: ChatSession
 
     var body: some View {
         VStack(spacing: 0) {
@@ -2262,7 +2289,9 @@ struct ConversationView: View {
                 ScrollView {
                     LazyVStack(spacing: 11) {
                         if session.messages.isEmpty {
-                            Text("Ask a question about this paper.")
+                            Text(session.isManagement
+                                ? "Manage skills, tools, and your Codex workspace."
+                                : "Ask a question about this paper.")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                                 .padding(.top, 28)
@@ -2298,9 +2327,9 @@ struct ConversationView: View {
         }
         .task(
             id: "\(session.selectedThread?.id ?? "none"):"
-                + "\(model.route == .paper(session.id) && session.isChatPresented)"
+                + "\(model.isConversationVisible(session))"
         ) {
-            guard model.route == .paper(session.id), session.isChatPresented else { return }
+            guard model.isConversationVisible(session) else { return }
             await model.followConversation(in: session)
         }
     }
@@ -2308,7 +2337,7 @@ struct ConversationView: View {
 
 struct ChatComposer: View {
     @EnvironmentObject private var model: AppModel
-    @ObservedObject var session: PaperSession
+    @ObservedObject var session: ChatSession
     @FocusState private var editorFocused: Bool
 
     var body: some View {
@@ -2322,7 +2351,7 @@ struct ChatComposer: View {
             VStack(spacing: 5) {
                 ZStack(alignment: .topLeading) {
                     if session.draft.isEmpty {
-                        Text("Ask about page \(session.pageIndex + 1)…")
+                        Text(session.isManagement ? "Ask Codex…" : "Ask about page \(session.pageIndex + 1)…")
                             .foregroundStyle(.tertiary)
                             .font(.system(size: 16))
                             .padding(.horizontal, 6)
@@ -2351,6 +2380,7 @@ struct ChatComposer: View {
                     .buttonStyle(.plain)
                     .disabled(
                         session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || session.isSending
                             || session.streamingMessage != nil
                             || session.messages.contains(where: { $0.status == "streaming" })
                     )
@@ -2438,7 +2468,7 @@ struct EffortMenu: View {
 
 struct MessageBubble: View {
     let message: ChatMessage
-    @ObservedObject var session: PaperSession
+    @ObservedObject var session: ChatSession
     @EnvironmentObject private var model: AppModel
 
     private var isUser: Bool { message.role == "user" }
@@ -2504,7 +2534,9 @@ struct MessageBubble: View {
                     source: message.content,
                     isStreaming: message.status == "streaming"
                 ) { page in
-                    model.pageChanged(page - 1, in: session)
+                    if let paper = session as? PaperSession {
+                        model.pageChanged(page - 1, in: paper)
+                    }
                 }
             }
             if message.status == "failed", !message.content.isEmpty {
@@ -2574,7 +2606,7 @@ private struct UserMessageContext: View {
 
 private struct StreamingMessageBubble: View {
     @ObservedObject var message: StreamingChatMessage
-    @ObservedObject var session: PaperSession
+    @ObservedObject var session: ChatSession
     let onContentUpdate: () -> Void
 
     var body: some View {

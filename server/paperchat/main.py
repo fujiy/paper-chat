@@ -561,18 +561,46 @@ def record_page_view(
 
 
 @app.get("/api/chats")
-def all_chats(_: Session, settings: SettingsDependency):
+def all_chats(
+    _: Session, settings: SettingsDependency, include_management: bool = False
+):
     with connect(settings.resolved_database_path) as conn:
         rows = conn.execute(
             """
-            SELECT t.*, p.title AS paper_title, p.authors_json, p.year
+            SELECT t.*, p.title AS paper_title, COALESCE(p.authors_json, '[]') AS authors_json,
+                   p.year
             FROM threads t
-            JOIN papers p ON p.id = t.paper_id
+            LEFT JOIN papers p ON p.id = t.paper_id
+            WHERE t.paper_id IS NOT NULL OR ?
             ORDER BY t.last_used_at DESC
             LIMIT 500
-            """
+            """,
+            (include_management,),
         ).fetchall()
     return [as_dict(row) for row in rows]
+
+
+@app.post("/api/chats", status_code=201)
+def create_management_chat(payload: ThreadRequest, _: Session, settings: SettingsDependency):
+    timestamp, thread_id = now(), new_id()
+    with connect(settings.resolved_database_path) as conn:
+        conn.execute(
+            """INSERT INTO threads
+               (id, paper_id, title, backend_type, last_used_at, created_at, updated_at)
+               VALUES (?, NULL, ?, ?, ?, ?, ?)""",
+            (thread_id, payload.title, settings.llm_backend, timestamp, timestamp, timestamp),
+        )
+        row = conn.execute("SELECT * FROM threads WHERE id = ?", (thread_id,)).fetchone()
+    return dict(row)
+
+
+@app.get("/api/threads/{thread_id}")
+def get_thread(thread_id: str, _: Session, settings: SettingsDependency):
+    with connect(settings.resolved_database_path) as conn:
+        row = conn.execute("SELECT * FROM threads WHERE id = ?", (thread_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Thread not found")
+    return dict(row)
 
 
 @app.get("/api/papers/{paper_id}")
@@ -794,8 +822,8 @@ async def send_message(
                 user_id,
                 thread_id,
                 payload.content,
-                json.dumps([{"page_index": payload.current_page_index}]),
-                payload.selected_text,
+                json.dumps([{"page_index": payload.current_page_index}] if thread["paper_id"] else []),
+                payload.selected_text if thread["paper_id"] else None,
                 payload.client_request_id,
                 timestamp,
                 timestamp,
@@ -828,6 +856,9 @@ async def send_message(
         f"Current PDF page: {page_number}\nQuestion: {payload.content}"
     )
 
+    if thread["paper_id"] is None:
+        prompt = payload.content
+
     async def generate():
         answer = ""
         terminal = False
@@ -852,7 +883,8 @@ async def send_message(
         try:
             yield sse("message", {"message_id": assistant_id, "user_message_id": user_id})
             async for event in backend(settings).stream(
-                prompt, thread["backend_thread_id"], payload.model, payload.effort
+                prompt, thread["backend_thread_id"], payload.model, payload.effort,
+                mode="management" if thread["paper_id"] is None else "paper",
             ):
                 if event.kind == "thread" and event.backend_thread_id:
                     with connect(settings.resolved_database_path) as conn:

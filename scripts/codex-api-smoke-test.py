@@ -21,7 +21,7 @@ with tempfile.TemporaryDirectory(prefix="paperchat-codex-api-") as data_dir:
         DATA_DIR=Path(data_dir),
         BOOTSTRAP_TOKEN="synthetic-bootstrap-token",
         LLM_BACKEND="codex",
-        CODEX_HOME_DIR=Path(os.environ["CODEX_HOME"]),
+        CODEX_HOME_DIR=Path(os.environ.get("CODEX_HOME", str(Path(data_dir) / "home"))),
         CODEX_WORKSPACE=Path(data_dir) / "workspace",
         _env_file=None,
     )

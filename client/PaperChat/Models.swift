@@ -87,7 +87,7 @@ struct ReadingState: Codable, Hashable, Sendable {
 
 struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     let id: String
-    let paperID: String
+    let paperID: String?
     var title: String
     let backendType: String
     let backendThreadID: String?
@@ -437,14 +437,14 @@ enum AgentTextAvailability: Equatable, Sendable {
 
 struct ChatOverview: Codable, Identifiable, Hashable, Sendable {
     let id: String
-    let paperID: String
+    let paperID: String?
     let title: String
     let backendType: String
     let backendThreadID: String?
     let backendStatus: String
     let isPrimary: Int
     let lastUsedAt: String
-    let paperTitle: String
+    let paperTitle: String?
     let authors: [Creator]
     let year: String?
 
@@ -484,6 +484,7 @@ enum WorkspaceRoute: Hashable {
     case starred
     case chats
     case paper(String)
+    case management(String)
 }
 
 enum ChatRoute {
@@ -514,24 +515,35 @@ struct PDFViewportTarget: Equatable, Sendable {
 }
 
 @MainActor
-final class PaperSession: ObservableObject, Identifiable {
+class ChatSession: ObservableObject, Identifiable {
     let id: String
-    @Published var paper: Paper
-    @Published var pdfURL: URL?
-    @Published var pageIndex: Int
-    @Published var zoomScale: Double
-    @Published var scrollOffset: Double
+    @Published var pageIndex = 0
     @Published var selectedText: String?
-    @Published var selectionSnapshot: PDFSelectionSnapshot?
     @Published var draft = ""
     @Published var threads: [ChatThread] = []
     @Published var selectedThread: ChatThread?
     @Published var messages: [ChatMessage] = []
     @Published var streamingMessage: StreamingChatMessage?
-    @Published var agentTextAvailability: AgentTextAvailability = .checking
+    @Published var isSending = false
     @Published var isChatPresented = false
-    @Published var sidebarMode: PaperSidebarMode = .chat
     @Published var chatRoute: ChatRoute = .list
+
+    var isManagement: Bool { !(self is PaperSession) }
+
+    init(id: String = UUID().uuidString) {
+        self.id = id
+    }
+}
+
+@MainActor
+final class PaperSession: ChatSession {
+    @Published var paper: Paper
+    @Published var pdfURL: URL?
+    @Published var zoomScale: Double
+    @Published var scrollOffset: Double
+    @Published var selectionSnapshot: PDFSelectionSnapshot?
+    @Published var agentTextAvailability: AgentTextAvailability = .checking
+    @Published var sidebarMode: PaperSidebarMode = .chat
     @Published var bookmarks: [PaperBookmark] = []
     @Published var bookmarkSuggestions: [BookmarkSuggestion] = []
     @Published var documentStructure: DocumentStructure?
@@ -544,11 +556,11 @@ final class PaperSession: ObservableObject, Identifiable {
     @Published var pdfViewportTarget: PDFViewportTarget?
 
     init(paper: Paper) {
-        id = paper.id
         self.paper = paper
-        pageIndex = paper.readingState?.pageIndex ?? 0
         zoomScale = paper.readingState?.zoomScale ?? 0
         scrollOffset = paper.readingState?.scrollOffset ?? 0
+        super.init(id: paper.id)
+        pageIndex = paper.readingState?.pageIndex ?? 0
     }
 }
 

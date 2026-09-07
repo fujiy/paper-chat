@@ -25,6 +25,7 @@ final class AppModel: ObservableObject {
     @Published var route: WorkspaceRoute = .start
     @Published var navigationHistory: [WorkspaceRoute] = []
     @Published var openSessions: [PaperSession] = []
+    @Published var managementSessions: [ChatSession] = []
     @Published var models: [ModelOption] = []
     @Published var selectedModelID: String?
     @Published var selectedEffortID: String?
@@ -113,6 +114,7 @@ final class AppModel: ObservableObject {
         searchPaperCount = nil
         searchNextOffset = 0
         openSessions = []
+        managementSessions = []
         navigationHistory = []
         route = .start
     }
@@ -376,7 +378,22 @@ final class AppModel: ObservableObject {
 
     func open(chat: ChatOverview) async {
         await perform {
-            let paper = try await client.paper(id: chat.paperID)
+            guard let paperID = chat.paperID else {
+                let session: ChatSession
+                if let existing = managementSessions.first(where: { $0.selectedThread?.id == chat.id }) {
+                    session = existing
+                } else {
+                    session = ChatSession()
+                    session.selectedThread = try await client.thread(id: chat.id)
+                    session.isChatPresented = true
+                    session.chatRoute = .conversation
+                    session.messages = try await client.messages(threadID: chat.id)
+                    managementSessions.append(session)
+                }
+                navigate(to: .management(session.id))
+                return
+            }
+            let paper = try await client.paper(id: paperID)
             let session = try await openPaper(paper, fromSidebar: false)
             if let thread = session.threads.first(where: { $0.id == chat.id }) {
                 try await selectThread(thread, in: session)
@@ -611,11 +628,29 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func showChatList(_ session: PaperSession) {
-        session.chatRoute = .list
+    func beginManagementChat() {
+        let session = ChatSession()
+        session.isChatPresented = true
+        session.chatRoute = .compose
+        managementSessions.append(session)
+        navigate(to: .management(session.id))
     }
 
-    func beginNewChat(in session: PaperSession) {
+    func isConversationVisible(_ session: ChatSession) -> Bool {
+        if session.isManagement { return route == .management(session.id) }
+        return route == .paper(session.id) && session.isChatPresented
+    }
+
+    func showChatList(_ session: ChatSession) {
+        if session.isManagement { navigate(to: .chats) }
+        else { session.chatRoute = .list }
+    }
+
+    func beginNewChat(in session: ChatSession) {
+        if session.isManagement {
+            beginManagementChat()
+            return
+        }
         session.selectedThread = nil
         session.messages = []
         session.streamingMessage = nil
@@ -627,15 +662,15 @@ final class AppModel: ObservableObject {
         await perform { try await selectThread(thread, in: session) }
     }
 
-    private func selectThread(_ thread: ChatThread, in session: PaperSession) async throws {
+    private func selectThread(_ thread: ChatThread, in session: ChatSession) async throws {
         session.selectedThread = thread
         session.chatRoute = .conversation
         session.streamingMessage = nil
         session.messages = try await client.messages(threadID: thread.id)
-        try await saveReadingState(session)
+        if let paper = session as? PaperSession { try await saveReadingState(paper) }
     }
 
-    func refreshConversation(in session: PaperSession) async {
+    func refreshConversation(in session: ChatSession) async {
         guard let threadID = session.selectedThread?.id else { return }
         // The sending device owns its transient streaming bubble until its
         // POST stream finishes. Event invalidations still keep other devices
@@ -655,7 +690,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func followConversation(in session: PaperSession) async {
+    func followConversation(in session: ChatSession) async {
         guard let threadID = session.selectedThread?.id else { return }
         var retryDelay = 1
         while !Task.isCancelled, session.selectedThread?.id == threadID {
@@ -700,9 +735,12 @@ final class AppModel: ObservableObject {
         stopPageViewTracking(session)
     }
 
-    func send(in session: PaperSession) async {
+    func send(in session: ChatSession) async {
         let question = session.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !question.isEmpty else { return }
+        guard !question.isEmpty, !session.isSending,
+              !session.messages.contains(where: { $0.status == "streaming" }) else { return }
+        session.isSending = true
+        defer { session.isSending = false }
         let selectedText = session.selectedText?.trimmingCharacters(in: .whitespacesAndNewlines)
         let messageCountBeforeSend = session.messages.count
 
@@ -712,11 +750,15 @@ final class AppModel: ObservableObject {
                 thread = selected
             } else {
                 let title = String(question.prefix(80))
-                thread = try await client.createThread(paperID: session.id, title: title)
+                if session.isManagement {
+                    thread = try await client.createManagementChat(title: title)
+                } else {
+                    thread = try await client.createThread(paperID: session.id, title: title)
+                }
                 session.threads.insert(thread, at: 0)
                 session.selectedThread = thread
                 session.chatRoute = .conversation
-                try await saveReadingState(session)
+                if let paper = session as? PaperSession { try await saveReadingState(paper) }
             }
 
             session.draft = ""
@@ -725,7 +767,7 @@ final class AppModel: ObservableObject {
                 threadID: thread.id,
                 role: "user",
                 content: question,
-                pageRefs: [.init(pageIndex: session.pageIndex)],
+                pageRefs: session.isManagement ? [] : [.init(pageIndex: session.pageIndex)],
                 selectedText: selectedText,
                 status: "completed",
                 createdAt: ISO8601DateFormatter().string(from: Date())

@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS reading_states (
   FOREIGN KEY(paper_id) REFERENCES papers(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS threads (
-  id TEXT PRIMARY KEY, paper_id TEXT NOT NULL, title TEXT NOT NULL,
+  id TEXT PRIMARY KEY, paper_id TEXT, title TEXT NOT NULL,
   backend_type TEXT NOT NULL, backend_thread_id TEXT, backend_status TEXT NOT NULL DEFAULT 'ready',
   summary TEXT, is_primary INTEGER NOT NULL DEFAULT 0, last_used_at TEXT NOT NULL,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
@@ -97,6 +97,30 @@ def connect(path: Path) -> sqlite3.Connection:
 def init(path: Path) -> None:
     with connect(path) as conn:
         conn.executescript(SCHEMA)
+        columns = conn.execute("PRAGMA table_info(threads)").fetchall()
+        if any(row["name"] == "paper_id" and row["notnull"] for row in columns):
+            # SQLite cannot drop NOT NULL in place. Keep the table name and IDs so
+            # messages/reading states and backend conversation references survive.
+            conn.execute("PRAGMA foreign_keys = OFF")
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                table_sql = SCHEMA.split("CREATE TABLE IF NOT EXISTS threads (", 1)[1]
+                table_sql = table_sql.split(";", 1)[0]
+                conn.execute("CREATE TABLE threads_new (" + table_sql)
+                conn.execute("INSERT INTO threads_new SELECT * FROM threads")
+                conn.execute("DROP TABLE threads")
+                conn.execute("ALTER TABLE threads_new RENAME TO threads")
+                conn.execute(
+                    "CREATE INDEX idx_threads_paper ON threads(paper_id, last_used_at DESC)"
+                )
+                if conn.execute("PRAGMA foreign_key_check").fetchall():
+                    raise RuntimeError("Thread migration violated foreign keys")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.execute("PRAGMA foreign_keys = ON")
 
 
 def as_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
