@@ -2,8 +2,9 @@
 set -eu
 
 context="${DOCKER_CONTEXT:-ubuntu}"
-old_project_dir="${ZOTERO_PROJECT_DIR:-../zotero-mcp-library}"
-zotero_env_file="${ZOTERO_ENV_FILE:-$old_project_dir/.env}"
+zotero_project_dir="${ZOTERO_PROJECT_DIR:-./services/zotero-search}"
+legacy_project="${ZOTERO_LEGACY_COMPOSE_PROJECT:-zotero-mcp-library}"
+zotero_env_file="${ZOTERO_ENV_FILE:-$zotero_project_dir/.env}"
 paperchat_env_file="${PAPERCHAT_ENV_FILE:-.env}"
 volume="${ZOTERO_DATA_VOLUME:-zotero-mcp-library_zotero_data}"
 secrets_volume="${PAPERCHAT_SECRETS_VOLUME:-paperchat_secrets}"
@@ -93,8 +94,8 @@ else
     alpine:3.22 chown 10001:10001 /runner-data
 fi
 
-docker_target compose \
-  -f "$old_project_dir/compose.yaml" -f "$old_project_dir/compose.prod.yaml" \
+docker_target compose -p "$legacy_project" \
+  -f "$zotero_project_dir/compose.yaml" -f "$zotero_project_dir/compose.prod.yaml" \
   --env-file "$zotero_env_file" down
 
 compose_target up -d --no-build

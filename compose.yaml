@@ -63,8 +63,8 @@ services:
 
   zotero-library-app:
     build:
-      context: ../zotero-mcp-library
-    command: zotero-mcp
+      context: ${ZOTERO_PROJECT_DIR:-./services/zotero-search}
+    command: zotero-search
     restart: unless-stopped
     environment: &zotero-environment
       ZOTERO_API_KEY: ${ZOTERO_API_KEY:-}
@@ -96,8 +96,8 @@ services:
 
   zotero-library-worker:
     build:
-      context: ../zotero-mcp-library
-    command: zotero-mcp-worker --mode sync-download
+      context: ${ZOTERO_PROJECT_DIR:-./services/zotero-search}
+    command: zotero-search-worker --mode sync-download
     restart: unless-stopped
     environment:
       <<: *zotero-environment
@@ -111,8 +111,8 @@ services:
 
   zotero-library-extractor:
     build:
-      context: ../zotero-mcp-library
-    command: zotero-mcp-worker --mode extract
+      context: ${ZOTERO_PROJECT_DIR:-./services/zotero-search}
+    command: zotero-search-worker --mode extract
     restart: unless-stopped
     user: "10001:10001"
     network_mode: "none"
@@ -137,7 +137,7 @@ services:
 
   grobid:
     build:
-      context: ../zotero-mcp-library
+      context: ${ZOTERO_PROJECT_DIR:-./services/zotero-search}
       dockerfile: Dockerfile.grobid
     init: true
     restart: unless-stopped
@@ -156,8 +156,8 @@ services:
 
   zotero-library-structure-worker:
     build:
-      context: ../zotero-mcp-library
-    command: zotero-mcp-worker --mode structure
+      context: ${ZOTERO_PROJECT_DIR:-./services/zotero-search}
+    command: zotero-search-worker --mode structure
     restart: unless-stopped
     user: "10001:10001"
     cap_drop: [ALL]

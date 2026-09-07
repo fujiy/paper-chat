@@ -79,3 +79,31 @@ For an end-to-end check, pipe `scripts/chat-smoke-test.py` into `python -` in th
 API container with `--prompt '...'`. Reuse the printed ID with `--thread-id` for a
 follow-up. The script checks SSE completion and persisted answers and revokes
 its temporary API session; the management conversation remains in Chats.
+
+## Zotero Search submodule
+
+Zotero Search lives in `services/zotero-search` as an independent repository.
+Initialize it after cloning, including in CI:
+
+```sh
+git submodule update --init --recursive
+```
+
+For a fresh clone, use `git clone --recurse-submodules <paperchat-url>`.
+Edit Zotero Search inside this checkout, switching to a branch before editing
+(submodule updates normally check out a detached HEAD). Run its tests, commit
+and push its changes first; then stage `services/zotero-search` in PaperChat to
+record the tested dependency commit. A PaperChat commit does not include
+uncommitted files inside the submodule. Avoid automatic `--remote` updates in CI.
+
+Zotero Search retains its standalone Compose configuration, Dockerfile and tests.
+PaperChat integrates it only through HTTP/MCP and builds from the pinned source.
+Configure Zotero in `services/zotero-search/.env` (see its `.env.example`).
+`ZOTERO_PROJECT_DIR` overrides the source directory; `ZOTERO_ENV_FILE` overrides
+the deployment environment file. These are local settings, not tracked secrets.
+
+The default data volume remains `zotero-mcp-library_zotero_data` and the database
+filename remains `zotero_mcp.sqlite3`. The deployment script explicitly stops the
+legacy Compose project `zotero-mcp-library`; override that name with
+`ZOTERO_LEGACY_COMPOSE_PROJECT` if needed. Do not delete volumes during migration.
+Standalone Compose and PaperChat must not use the same data simultaneously.

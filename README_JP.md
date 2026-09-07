@@ -10,7 +10,7 @@ PaperChatは、Zoteroの論文PDFをmacOS・iPadOS・iOSで読み、論文ごと
 - Zotero検索、PDF Range配信、端末キャッシュ、閲覧位置同期
 - 複数チャットスレッド、SSE回答、ページ引用ジャンプ、Zoteroで開く
 - `codex app-server`とテスト用`FakeLLMBackend`の交換可能なバックエンド
-- PaperChatと`zotero-mcp-library`をまとめたDocker Compose
+- PaperChatと`zotero-search`をまとめたDocker Compose
 
 Web PDF取り込み、Safari Share Extension、Obsidian保存、PDF注釈はMVP後の範囲です。
 
@@ -39,7 +39,7 @@ docker compose -f compose.yaml -f compose.test.yaml \
 
 ## 既存Zotero環境からのデプロイ
 
-前提として、このリポジトリと`zotero-mcp-library`を同じ親ディレクトリに配置し、後者の`.env`にZotero設定を保存します。実際のホスト名や資格情報はGitへ追加しません。
+`git submodule update --init --recursive`で`services/zotero-search`を取得し、その`.env`にZotero設定を保存します。実際のホスト名や資格情報はGitへ追加しません。
 
 `scripts/deploy-home.sh`は次を行います。
 

@@ -1,0 +1,3 @@
+[submodule "services/zotero-search"]
+	path = services/zotero-search
+	url = git@github.com:fujiy/zotero-search.git

@@ -7,3 +7,6 @@ DerivedData
 **/__pycache__
 **/.pytest_cache
 
+
+# Built separately; do not send nested credentials or data to PaperChat builds.
+services/

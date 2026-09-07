@@ -44,7 +44,7 @@ MVPでは次を対象外とする．
 - ChatGPT Webの非公式自動操作や回答DOMの抽出．
 - 複数ユーザー向けサービスとしての公開．
 - Zotero由来PDFをPaperChat固有の原本として恒久保管すること．
-- `zotero-mcp-library`が持つZotero同期，PDF抽出，OCR，および全文索引機能の再実装．
+- `zotero-search`が持つZotero同期，PDF抽出，OCR，および全文索引機能の再実装．
 
 ## 4. 基本方針
 
@@ -87,11 +87,11 @@ PaperChatは次を担当する．
 - 現在ページ・選択範囲を用いた質問．
 - Webまたはローカルから取り込んだPDF原本の保管．
 
-### 4.4 `zotero-mcp-library`との役割分担
+### 4.4 `zotero-search`との役割分担
 
-`zotero-mcp-library`は別リポジトリとして維持し，PaperChatのDocker Composeから固定バージョンのコンテナイメージを起動する．
+`zotero-search`は別リポジトリとして維持し，PaperChatのDocker Composeから固定バージョンのコンテナイメージを起動する．
 
-`zotero-mcp-library`は次を担当する．
+`zotero-search`は次を担当する．
 
 - Zotero Web APIからのメタデータ差分同期．
 - Zotero PDFのダウンロードおよび削除可能なキャッシュ．
@@ -100,7 +100,7 @@ PaperChatは次を担当する．
 - 書誌情報およびページ本文の全文索引．
 - citekey，item key，attachment keyによる文献検索およびページ取得．
 
-PaperChatは`zotero-mcp-library`のSQLiteデータベースや保存ディレクトリを直接参照せず，内部APIまたはMCPを介して利用する．
+PaperChatは`zotero-search`のSQLiteデータベースや保存ディレクトリを直接参照せず，内部APIまたはMCPを介して利用する．
 これにより，両リポジトリの独立性を維持しつつ，利用者はPaperChatのDocker Composeから両サービスを一括して起動できる．
 
 ### 4.5 資格情報の分離
@@ -108,9 +108,9 @@ PaperChatは`zotero-mcp-library`のSQLiteデータベースや保存ディレク
 認証情報は用途ごとに分離する．
 
 1. PaperChatクライアントは，PaperChatのaccess tokenおよびrefresh tokenを用いる．
-2. PaperChatサーバーは，内部HTTP API専用のservice tokenを用いて`zotero-mcp-library`へ接続する．
-3. `zotero-mcp-library`の同期workerだけがZotero API tokenを保持する．
-4. CodexはZotero API tokenおよびOAuth資格情報を保持せず，Docker内部専用のMCP service tokenで`zotero-mcp-library`へ接続する．このtokenはPaperChat内部API用service tokenとも分離する．
+2. PaperChatサーバーは，内部HTTP API専用のservice tokenを用いて`zotero-search`へ接続する．
+3. `zotero-search`の同期workerだけがZotero API tokenを保持する．
+4. CodexはZotero API tokenおよびOAuth資格情報を保持せず，Docker内部専用のMCP service tokenで`zotero-search`へ接続する．このtokenはPaperChat内部API用service tokenとも分離する．
 
 ## 5. システム構成
 
@@ -133,7 +133,7 @@ PaperChatは`zotero-mcp-library`のSQLiteデータベースや保存ディレク
 └───────────┬────────────────┬───────────┘
             │                │ internal API service token
             ▼                ▼
-    Codex SDK/app-server   zotero-mcp-library
+    Codex SDK/app-server   zotero-search
             └───────────────▲
               MCP + dedicated service token
                               │ Zotero API token
@@ -182,14 +182,14 @@ file:<sha256(file_bytes)>
 ### 7.1 Zotero Libraryから論文を開く
 
 1. アプリ内でZotero Libraryを検索する．
-2. PaperChatサーバーが`zotero-mcp-library`を介してattachment情報を取得する．
+2. PaperChatサーバーが`zotero-search`を介してattachment情報を取得する．
 3. ローカルキャッシュを確認する．
 4. 未取得または更新済みなら，PaperChat APIからPDFをダウンロードする．
 5. 前回のページ，ズーム，アクティブスレッドを復元する．
 6. PDFとチャットを表示する．
 
 クライアントはZotero Web APIを直接呼び出さず，Zotero API tokenを保持しない．
-PaperChatサーバーは`zotero-mcp-library`がキャッシュしたPDFを内部APIから取得し，HTTP RangeおよびETagに対応した形でクライアントへ配信する．
+PaperChatサーバーは`zotero-search`がキャッシュしたPDFを内部APIから取得し，HTTP RangeおよびETagに対応した形でクライアントへ配信する．
 
 ### 7.2 Web上のPDFを開く
 
@@ -224,7 +224,7 @@ PaperChatサーバーは`zotero-mcp-library`がキャッシュしたPDFを内部
 
 ### 7.4 別の論文を参照する
 
-現在の論文以外の情報が必要な場合，Codexは`zotero-mcp-library`の読み取り専用MCPツールを直接利用する．登録済みツールは原則すべて利用可能とし，質問に必要な範囲をagentが判断する．
+現在の論文以外の情報が必要な場合，Codexは`zotero-search`の読み取り専用MCPツールを直接利用する．登録済みツールは原則すべて利用可能とし，質問に必要な範囲をagentが判断する．
 
 - `search_papers`により，Zoteroライブラリ全体から関連文献を検索する．
 - `search_evidence`により，特定文献内の根拠箇所を検索する．
@@ -335,10 +335,10 @@ DocumentRepository
 
 初期実装は次の2種類とする．
 
-- `ZoteroDocumentRepository`は，`zotero-mcp-library`の内部APIまたはMCPを利用する．
+- `ZoteroDocumentRepository`は，`zotero-search`の内部APIまたはMCPを利用する．
 - `ImportedDocumentRepository`は，PaperChatへ取り込んだWebまたはローカルPDFを管理する．
 
-PaperChatは`zotero-mcp-library`のデータベースおよび共有ボリュームを直接参照しない．
+PaperChatは`zotero-search`のデータベースおよび共有ボリュームを直接参照しない．
 PDF本文，PDFファイル，およびページ画像は，認証された内部APIを介して取得する．
 
 ### 9.3 クライアント向けAPI案
@@ -399,7 +399,7 @@ PDF質問用途では，Codexの権限を最小化する．
 
 CodexにはPDF保存ディレクトリ全体をマウントしない．
 通常は抽出本文をテキストとして渡し，図表または数式を確認する場合だけ，サーバーが生成したページ画像を渡す．
-別の論文を参照する場合は，`zotero-mcp-library`の読み取り専用MCPツールを利用する．
+別の論文を参照する場合は，`zotero-search`の読み取り専用MCPツールを利用する．
 
 ## 10. データモデル
 
@@ -447,7 +447,7 @@ ImportedDocumentBlob
 ```
 
 この表はPaperChatが管理するWebまたはローカル由来のPDFに用いる．
-Zotero PDFの保存状態は`zotero-mcp-library`が管理し，PaperChat DBにはその内部保存パスを記録しない．
+Zotero PDFの保存状態は`zotero-search`が管理し，PaperChat DBにはその内部保存パスを記録しない．
 `cache`は公開URLから再取得できるPDFに用い，`retained`は再取得を保証できない取り込み原本に用いる．
 
 ### 10.4 ImportedDocumentPage
@@ -466,7 +466,7 @@ ImportedDocumentPage
 
 `page_index`は0始まりのPDF内部ページ番号とする．
 画面表示には1を加え，論文に印刷されたページ番号は`printed_page_label`として別に保持する．
-Zotero PDFのページ本文は`zotero-mcp-library`が管理し，文献ゲートウェイを介して取得する．
+Zotero PDFのページ本文は`zotero-search`が管理し，文献ゲートウェイを介して取得する．
 
 ### 10.5 ReadingState
 
@@ -527,7 +527,7 @@ Message
 
 ### 11.1 保存方針
 
-Zotero PDFではZoteroを原本の管理元とし，`zotero-mcp-library`が保持するPDFは再取得可能なキャッシュとする．
+Zotero PDFではZoteroを原本の管理元とし，`zotero-search`が保持するPDFは再取得可能なキャッシュとする．
 WebまたはローカルからPaperChatへ取り込んだPDFでは，PaperChatサーバーに保存したファイルを原本とする．
 PDFは内容のSHA-256により重複排除し，抽出本文，検索索引，およびページ画像は再生成可能な派生データとして扱う．
 
@@ -550,7 +550,7 @@ PaperChat取り込み文書に対するサーバー上の論理的な保存構�
 
 物理パスはDBの公開識別子として使用しない．
 ページ画像には容量上限とLRU削除を適用する．
-Zotero PDF，その抽出本文，および検索索引は`zotero-mcp-library`固有の永続ボリュームで管理する．
+Zotero PDF，その抽出本文，および検索索引は`zotero-search`固有の永続ボリュームで管理する．
 
 ### 11.2 文脈構成
 
@@ -564,7 +564,7 @@ Zotero PDF，その抽出本文，および検索索引は`zotero-mcp-library`�
 5. 過去会話の要約．
 6. ページ画像．
 
-現在の論文以外の文献が必要な場合は，Codexが`zotero-mcp-library`のMCPツールで検索し，必要なページを取得する．
+現在の論文以外の文献が必要な場合は，Codexが`zotero-search`のMCPツールで検索し，必要なページを取得する．
 
 ### 11.3 数式・図表
 
@@ -599,9 +599,9 @@ CodexにはPDFファイルの保存領域を直接参照させず，必要なペ
 ### 13.1 ローカル起動
 
 PaperChatサーバーは`docker compose up --build`により起動できるようにする．
-PaperChatのComposeは，PaperChat API，Codex runtime，取り込み文書処理worker，および固定バージョンの`zotero-mcp-library`サービス群を構成する．
+PaperChatのComposeは，PaperChat API，Codex runtime，取り込み文書処理worker，および固定バージョンの`zotero-search`サービス群を構成する．
 Python版Codex SDKはPaperChat APIコンテナ内で固定バージョンの`codex app-server`を子プロセスとして起動し，実験的なネットワークWebSocket transportには依存しない．
-既に`zotero-mcp-library`が稼働している環境では，内部URLとservice tokenを指定して外部サービスとして利用できるようにする．
+既に`zotero-search`が稼働している環境では，内部URLとservice tokenを指定して外部サービスとして利用できるようにする．
 
 ### 13.2 Compose構成
 
@@ -620,10 +620,10 @@ compose.test.yaml
 └── temporary volumes
 ```
 
-Zotero API tokenは`zotero-mcp-library`の同期workerだけに渡す．
-PaperChat APIと`zotero-mcp-library`の間では，Docker secretとして渡した専用のservice tokenを用いる．
+Zotero API tokenは`zotero-search`の同期workerだけに渡す．
+PaperChat APIと`zotero-search`の間では，Docker secretとして渡した専用のservice tokenを用いる．
 内部サービスは原則としてホストへポートを公開しない．
-`zotero-mcp-library`には，Docker secretからの資格情報読み込み，service token認証，PDF Range配信，およびページ画像生成に必要な内部APIを追加する．
+`zotero-search`には，Docker secretからの資格情報読み込み，service token認証，PDF Range配信，およびページ画像生成に必要な内部APIを追加する．
 
 ### 13.3 ローカルDockerテスト
 
@@ -646,8 +646,8 @@ macOSおよびiPadOSクライアントのテストはLinuxコンテナの対象�
 - access tokenは短時間で失効させ，refresh tokenはローテーションする．
 - refresh tokenは端末のKeychainに保存し，端末単位で失効できるようにする．
 - Codex認証情報をクライアントへ配布しない．
-- Zotero API tokenはDocker secretとして`zotero-mcp-library`の同期workerだけに渡す．
-- PaperChatと`zotero-mcp-library`の間では，Zotero API tokenとは異なるservice tokenを用いる．
+- Zotero API tokenはDocker secretとして`zotero-search`の同期workerだけに渡す．
+- PaperChatと`zotero-search`の間では，Zotero API tokenとは異なるservice tokenを用いる．
 - PDF配信URLには短時間の署名付きURLを用いる．
 - ログにはPDF本文，選択テキスト，認証情報を原則として残さない．
 - Codex runtimeからホームディレクトリ全体を参照できないようにする．
@@ -717,7 +717,7 @@ macOSおよびiPadOSクライアントのテストはLinuxコンテナの対象�
 
 ### Phase 2: Zotero統合
 
-- `zotero-mcp-library`とのサービス間接続．
+- `zotero-search`とのサービス間接続．
 - Zotero Library検索．
 - PaperChat API経由のPDF取得．
 - キャッシュ，メタデータ，最近読んだ論文．
@@ -746,7 +746,7 @@ macOSおよびiPadOSクライアントのテストはLinuxコンテナの対象�
 
 ## 17. 未決事項
 
-1. `zotero-mcp-library`に追加するPDF Range配信およびページ画像生成のAPI形式．
+1. `zotero-search`に追加するPDF Range配信およびページ画像生成のAPI形式．
 2. PaperChat固有認証の初回端末登録方法．
 3. iPadからZoteroアプリの特定PDFおよび特定ページを開く方法．
 4. Web PDFとZotero attachmentの重複候補を自動統合するか，ユーザー確認を必須とするか．
@@ -763,20 +763,20 @@ MVPでは次を採用する．
 - サーバー: Python + FastAPIを第一候補とする．
 - LLMバックエンド: Python版Codex SDKを介した`codex app-server`．
 - 文献基盤: Zoteroを継続利用．
-- Zotero連携: 別リポジトリの`zotero-mcp-library`を固定バージョンのコンテナとしてComposeから起動する．
-- Zotero認証: Zotero API tokenは`zotero-mcp-library`の同期workerだけが保持する．
+- Zotero連携: 別リポジトリの`zotero-search`を固定バージョンのコンテナとしてComposeから起動する．
+- Zotero認証: Zotero API tokenは`zotero-search`の同期workerだけが保持する．
 - サービス間認証: PaperChat専用のservice tokenを使用する．
 - クライアント認証: PaperChat固有のaccess tokenおよびrefresh tokenを使用する．
 - PDF取得: クライアントはPaperChat APIから取得し，Zotero Web APIを直接呼び出さない．
 - PDF保存: Zotero PDFはサーバーおよび端末の削除可能なキャッシュとし，取り込みPDFはPaperChatサーバーに原本を保存する．
 - 注釈: Zoteroへ委任．
 - チャット履歴: PaperChat DBへ全文を保存して基準データとし，Codex threadは再開用の外部状態として扱う．
-- Codex文献アクセス: Docker内部の専用MCP service tokenを用い，`zotero-mcp-library`の読み取り専用ツールを直接利用する．
+- Codex文献アクセス: Docker内部の専用MCP service tokenを用い，`zotero-search`の読み取り専用ツールを直接利用する．
 - サーバー起動: Docker Composeを使用する．
 - テスト: サーバー試験はローカルDockerで実行し，本番デプロイ定義は分離する．
 - Web連携: Safari Share Extensionを後付けする．
 - 将来性: LLM backendを抽象化し，Codex依存を局所化する．
 
-この構成により，PaperChatは会話履歴とクライアント体験を管理し，`zotero-mcp-library`はZotero同期と派生文献データを管理する．
+この構成により，PaperChatは会話履歴とクライアント体験を管理し，`zotero-search`はZotero同期と派生文献データを管理する．
 両者をAPI境界で分離することで，既存機能の重複実装を避けながら，単一のDocker Composeによる起動を可能にする．
 Codexが論文質問に適さない場合も，PaperChat DBおよび文献ゲートウェイを維持したまま，別のLLMバックエンドへ切り替えられる．
