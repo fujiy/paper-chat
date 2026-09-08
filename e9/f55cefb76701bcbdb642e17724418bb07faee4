@@ -1,0 +1,22 @@
+client/PaperChat/PDFKitView.swift
+  s_1ec6b9e47edebf::t_bb2c8ccb385a10 85-89,130-133,135,161,192-236,867-878
+client/Tests/PDFInitialLayoutCheck.swift
+  s_1ec6b9e47edebf::t_7029c5cbf3deff 2-3
+  s_1ec6b9e47edebf::t_11497643ff8b58 1,4-94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "e9f55cefb76701bcbdb642e17724418bb07faee4",
+  "prompts": {},
+  "sessions": {
+    "s_1ec6b9e47edebf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07f96-f589-7a02-ad53-03e5950dac33",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Yuki Fujihara <mail@fujiy.dev>"
+    }
+  }
+}
