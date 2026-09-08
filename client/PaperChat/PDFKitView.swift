@@ -82,6 +82,11 @@ extension PDFKitView {
         coordinator.lastImmersive = isImmersive
         coordinator.lastInspectorPresented = isInspectorPresented
         coordinator.lastThumbnailInteractionToken = thumbnailInteractionToken
+        #if os(macOS)
+        (view as? PaperPDFView)?.onLayout = { [weak coordinator] in
+            coordinator?.updateScaleAfterLayout()
+        }
+        #endif
         loadDocument(in: view, coordinator: coordinator)
     }
 
@@ -121,12 +126,14 @@ extension PDFKitView {
 
     private func loadDocument(in view: PDFView, coordinator: Coordinator) {
         coordinator.isRestoring = true
-        view.document = PDFDocument(url: url)
         #if os(macOS)
-        view.layoutSubtreeIfNeeded()
+        coordinator.pendingInitialViewport = (pageIndex, zoomScale, scrollOffset)
+        coordinator.lastScaleViewportSize = nil
+        view.document = PDFDocument(url: url)
+        view.needsLayout = true
         #else
+        view.document = PDFDocument(url: url)
         view.layoutIfNeeded()
-        #endif
         let fitScale = max(view.scaleFactorForSizeToFit, 0.1)
         setScaleRange(in: view, fitScale: fitScale)
         view.scaleFactor = zoomScale > 0 ? zoomScale : fitScale
@@ -151,6 +158,7 @@ extension PDFKitView {
             coordinator.applyHighlight(highlightTarget)
             coordinator.applyStructureLinks(documentStructure)
         }
+        #endif
     }
 
     private func setScaleRange(in view: PDFView, fitScale: Double) {
@@ -181,6 +189,51 @@ extension PDFKitView {
         var appliedStructure: DocumentStructure?
         var structureLinkAnnotations: [(PDFPage, PDFAnnotation)] = []
         nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
+        #if os(macOS)
+        var pendingInitialViewport: (pageIndex: Int, zoomScale: Double, scrollOffset: Double)?
+        var lastScaleViewportSize: CGSize?
+        private var isUpdatingScaleAfterLayout = false
+
+        func updateScaleAfterLayout() {
+            guard !isUpdatingScaleAfterLayout, let view, view.window != nil,
+                  let document = view.document, document.pageCount > 0,
+                  let clipView = view.documentView?.enclosingScrollView?.contentView else { return }
+            let size = clipView.bounds.size
+            guard size.width > 0, size.height > 0,
+                  pendingInitialViewport != nil || lastScaleViewportSize != size else { return }
+            let fitScale = view.scaleFactorForSizeToFit
+            guard fitScale.isFinite, fitScale > 0 else { return }
+
+            isUpdatingScaleAfterLayout = true
+            isRestoring = true
+            lastScaleViewportSize = size
+            parent.setScaleRange(in: view, fitScale: fitScale)
+            if let initial = pendingInitialViewport {
+                view.scaleFactor = initial.zoomScale > 0 ? initial.zoomScale : fitScale
+                if let page = document.page(at: initial.pageIndex) {
+                    view.go(to: page)
+                }
+                lastPageIndex = initial.pageIndex
+                restoreScrollOffset(initial.scrollOffset)
+                pendingInitialViewport = nil
+            }
+            lastScale = view.scaleFactor
+            isRestoring = false
+            isUpdatingScaleAfterLayout = false
+
+            // Publish bindings outside AppKit/SwiftUI's layout pass. A newly
+            // loaded document must never persist its provisional scale.
+            DispatchQueue.main.async { [weak self, weak document] in
+                guard let self, let document, self.view?.document === document,
+                      self.pendingInitialViewport == nil else { return }
+                self.syncState()
+                self.applyHighlight(self.parent.highlightTarget)
+                self.applyViewportTarget(self.parent.viewportTarget)
+                self.applyStructureLinks(self.parent.documentStructure)
+                self.updateContentInsets(bottomOverlayInset: self.parent.bottomOverlayInset)
+            }
+        }
+        #endif
         #if !os(macOS)
         private var scrollObservation: NSKeyValueObservation?
         private var lastObservedVerticalOffset: CGFloat?
@@ -811,6 +864,18 @@ private typealias PlatformPDFImage = UIImage
 
 #if os(macOS)
 private final class PaperPDFView: PDFView {
+    var onLayout: (() -> Void)?
+
+    override func layout() {
+        super.layout()
+        onLayout?()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        needsLayout = true
+    }
+
     override func resetCursorRects() {
         discardCursorRects()
         addCursorRect(bounds, cursor: .arrow)
