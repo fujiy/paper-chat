@@ -1,0 +1,32 @@
+client/PaperChat.xcodeproj/project.pbxproj
+  s_f81add16f967b3::t_7fc7a1f38fa75e 283-284
+client/PaperChat.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+  s_f81add16f967b3::t_864d4b8ec96135 10
+  s_f81add16f967b3::t_e815c5488ab9c5 9
+client/PaperChat/Views.swift
+  s_c8d384d746b8cc::t_0f9b2d0ede8f5b 227-229,287-290,296,298-300,302-304,363-367
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "013dbf46a397501fa3a16caae8d2309b1995fe46",
+  "prompts": {},
+  "sessions": {
+    "s_c8d384d746b8cc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07fdd-a4e8-7392-8b9a-a9ebe0708f34",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Yuki Fujihara <mail@fujiy.dev>"
+    },
+    "s_f81add16f967b3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0801d-f528-7943-8eb2-434dd7d454af",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Yuki Fujihara <mail@fujiy.dev>"
+    }
+  }
+}
