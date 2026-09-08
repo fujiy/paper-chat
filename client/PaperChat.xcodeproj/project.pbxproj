@@ -280,8 +280,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/mgriebling/SwiftMath.git";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.7.3;
+				kind = revision;
+				revision = 1d2c90827e9c3908269d810d055fb03b7da5fd53;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

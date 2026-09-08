@@ -224,7 +224,9 @@ struct WorkspaceDetail: View {
     @Environment(\.openURL) private var openURL
     @Binding var columnVisibility: NavigationSplitViewVisibility
     @Binding var isPDFImmersive: Bool
-    @State private var showsPDFSidebarFallback = false
+    #if !os(macOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
 
     var body: some View {
         ZStack {
@@ -282,26 +284,24 @@ struct WorkspaceDetail: View {
             WorkspaceShortcuts()
         }
         .toolbar {
-            #if !os(macOS)
-            if showsPDFSidebarFallback {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Show Sidebar", systemImage: "sidebar.left") {
+            ToolbarItemGroup(placement: backButtonPlacement) {
+                #if !os(macOS)
+                if horizontalSizeClass == .regular {
+                    Button("Toggle Sidebar", systemImage: "sidebar.left") {
                         withAnimation(.snappy) {
-                            showsPDFSidebarFallback = false
                             columnVisibility = columnVisibility == .all ? .detailOnly : .all
                         }
                     }
                     .labelStyle(.iconOnly)
+                    .accessibilityIdentifier("workspace.sidebar")
                 }
-            }
-            #endif
-            if !model.navigationHistory.isEmpty {
-                ToolbarItem(placement: backButtonPlacement) {
-                    Button("Back", systemImage: "chevron.left") {
-                        model.goBack()
-                    }
-                    .labelStyle(.iconOnly)
+                #endif
+                Button("Back", systemImage: "chevron.left") {
+                    model.goBack()
                 }
+                .labelStyle(.iconOnly)
+                .disabled(model.navigationHistory.isEmpty)
+                .accessibilityIdentifier("workspace.back")
             }
             if let session = model.activeSession {
                 ToolbarItemGroup(placement: .primaryAction) {
@@ -360,25 +360,11 @@ struct WorkspaceDetail: View {
                 }
             }
         }
-        .onChange(of: model.route, initial: true) { previousRoute, route in
-            #if !os(macOS)
-            if case .paper = route {
-                showsPDFSidebarFallback = columnVisibility != .all
-            } else if case .paper = previousRoute {
-                // Keep the fallback state from the PDF screen. If the sidebar was
-                // opened there, the system toggle has already restored itself.
-            } else {
-                showsPDFSidebarFallback = false
-            }
-            #endif
-        }
-        .onChange(of: columnVisibility) { _, visibility in
-            #if !os(macOS)
-            if visibility == .all {
-                showsPDFSidebarFallback = false
-            }
-            #endif
-        }
+        #if !os(macOS)
+        // Own the regular-width toggle so its presence never depends on route or
+        // a previous split-view transition. Compact layouts keep system navigation.
+        .toolbar(removing: horizontalSizeClass == .regular ? .sidebarToggle : nil)
+        #endif
     }
 
     private var backButtonPlacement: ToolbarItemPlacement {
