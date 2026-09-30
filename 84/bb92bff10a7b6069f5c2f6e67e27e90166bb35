@@ -1,0 +1,88 @@
+client/PaperChat/AppModel.swift
+  s_f0a16114c33ba1::t_3da1b0e499f791 495
+  s_d5b704d48029df::t_9fa46a54f9be29 511,566,621,643
+  s_d5b704d48029df::t_cbfbcc46cb775e 549,629-631,656,665-669,997-998,1004
+  s_d5b704d48029df::t_8678f68e25d380 15,1009
+  s_f0a16114c33ba1::t_ff0ea8eaf3b0dc 492-494,496-497,504-505
+  s_d5b704d48029df::t_44e1898bc38334 1030,1050,1081
+  s_d5b704d48029df::t_3b993f48d022d3 578-600
+  s_d5b704d48029df::t_3fbe7f13061dbb 602,607
+client/PaperChat/Views.swift
+  s_d5b704d48029df::t_bcf2dffaa9df5c 1257,1280
+  s_f0a16114c33ba1::t_5c577761a48f6f 1790-1793,1810-1828,1830-1831,1833-1839,1849-1854,1866-1870,1882-1886
+  s_f0a16114c33ba1::t_ca7c0178f91651 394,1403
+  s_f0a16114c33ba1::t_280e4e2d52c4ca 1937-1953,1955-1960,1962-1963,1965,1968,1988-1997,1999-2000,2002,2005-2007,2035-2051,2053,2056-2059,2061-2063,2065-2067,2070-2071,2074
+  s_f0a16114c33ba1::t_875f5ddcc02a70 1794-1806
+  s_f0a16114c33ba1::t_c331d29e84d3ae 2115,2120-2121
+  s_f0a16114c33ba1::t_a505f78409eb07 1343,1352,1361-1363,1392-1397,1400-1401
+  s_f0a16114c33ba1::t_3de0e855fa283e 1421-1422,1424,1463-1465,1481-1489
+  s_f0a16114c33ba1::t_66e70ea16d57e5 1466,1840
+  s_f0a16114c33ba1::t_08f212c8be3f71 1843-1848,1855-1862,1864-1865,1871-1878,1880-1881,1887-1898,1902
+  s_f0a16114c33ba1::t_932375325aaaf1 350,396
+  s_d5b704d48029df::t_8678f68e25d380 15,67-73
+  s_f0a16114c33ba1::t_daeffa4fa4e85c 1841-1842
+client/PaperChat/PDFKitView.swift
+  s_d5b704d48029df::t_fbfd3eebad8ed7 441,443,450
+  s_d5b704d48029df::t_783c6cea78c9b0 15,48
+  s_d5b704d48029df::t_c9706c5106d2cc 341-351
+  s_d5b704d48029df::t_adaaa5a662f446 18,51,352-353,423-424,426-429,431-438
+  s_d5b704d48029df::t_48d56500b1c1e0 439-440,442,444-445,451-473
+  s_d5b704d48029df::t_becce08ad5ed02 474-475
+server/tests/test_api.py
+  s_d5b704d48029df::t_f797bf9f26d8a3 402,407,415,436-446,454,456,463
+server/paperchat/main.py
+  s_d5b704d48029df::t_8835ce4f68d46c 142,481,484,491,502,510
+client/PaperChat.xcodeproj/project.pbxproj
+  s_d5b704d48029df::t_8678f68e25d380 23,43,84,194
+server/tests/test_management.py
+  s_d5b704d48029df::t_712e3b64ba048f 125-175
+scripts/smoke-test.py
+  s_d5b704d48029df::t_7085dcaf09dc92 73-102,198
+client/PaperChat/Models.swift
+  s_d5b704d48029df::t_9c1f8ece0129fb 349,357,521,552
+  s_f0a16114c33ba1::t_965f43f3beba83 240-241
+  s_d5b704d48029df::t_608344b040554d 551
+  s_f0a16114c33ba1::t_b8e3c8bbdb08a4 563
+client/PaperChat/SimulatorBookmarkReproFixture.swift
+  s_d5b704d48029df::t_a38b0c73287a4a 51-52,63,75
+  s_d5b704d48029df::t_9fa46a54f9be29 83-90,99
+  s_d5b704d48029df::t_8678f68e25d380 1-50,54-62,64-74,76-82,91-98,100-157
+  s_d5b704d48029df::t_6a1701d742218b 53
+server/paperchat/db.py
+  s_d5b704d48029df::t_e27e3e6d88a946 60-61,130-192
+  s_d5b704d48029df::t_89d6e64f122e50 193-195
+  s_d5b704d48029df::t_45a0be4435f711 196-199
+docs/simulator-bookmark-position-repro.md
+  s_d5b704d48029df::t_8678f68e25d380 1-12,22-26,53-56
+  s_d5b704d48029df::t_eaf60d39d8c1ff 17-19
+  s_d5b704d48029df::t_58bd8faa35955e 13
+  s_d5b704d48029df::t_2f8a0fd9c83c18 14-16,27-29,33-46
+  s_d5b704d48029df::t_48b64e290f449f 20,47-52
+  s_d5b704d48029df::t_f3d45226f5918d 21,30-32
+client/PaperChat/APIClient.swift
+  s_d5b704d48029df::t_d563779e7ed385 116,126,544
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "84bb92bff10a7b6069f5c2f6e67e27e90166bb35",
+  "prompts": {},
+  "sessions": {
+    "s_d5b704d48029df": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0f134-a74b-7b00-8507-8508655b4222",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Yuki Fujihara <mail@fujiy.dev>"
+    },
+    "s_f0a16114c33ba1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0f0b4-1b35-7da3-849f-46b8a4c31871",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Yuki Fujihara <mail@fujiy.dev>"
+    }
+  }
+}
