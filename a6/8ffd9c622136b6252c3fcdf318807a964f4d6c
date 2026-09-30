@@ -1,0 +1,23 @@
+client/PaperChat/Views.swift
+  s_634e9a8d1a66b5::t_0a11dd01561f5f 2320-2321
+client/PaperChat/ChatKitView.swift
+  s_634e9a8d1a66b5::t_339e27e6325755 78-79
+client/PaperChat/ChatKit.html
+  s_634e9a8d1a66b5::t_0a11dd01561f5f 21,28,88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a68ffd9c622136b6252c3fcdf318807a964f4d6c",
+  "prompts": {},
+  "sessions": {
+    "s_634e9a8d1a66b5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0f0b2-2ddf-7b31-b6ce-0dc8c5787e47",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Yuki Fujihara <mail@fujiy.dev>"
+    }
+  }
+}
