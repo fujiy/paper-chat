@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS paper_stars (
 );
 CREATE TABLE IF NOT EXISTS bookmarks (
   id TEXT PRIMARY KEY, paper_id TEXT NOT NULL, kind TEXT NOT NULL,
-  page_index INTEGER NOT NULL, scroll_offset REAL NOT NULL DEFAULT 0,
+  page_index INTEGER NOT NULL,
+  page_position REAL NOT NULL CHECK(page_position >= 0 AND page_position <= 1),
   selected_text TEXT, selection_rects_json TEXT NOT NULL DEFAULT '[]',
   note TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   FOREIGN KEY(paper_id) REFERENCES papers(id) ON DELETE CASCADE,
@@ -119,6 +120,76 @@ def init(path: Path) -> None:
                 )
                 if conn.execute("PRAGMA foreign_key_check").fetchall():
                     raise RuntimeError("Thread migration violated foreign keys")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.execute("PRAGMA foreign_keys = ON")
+
+        bookmark_columns = conn.execute("PRAGMA table_info(bookmarks)").fetchall()
+        if any(row["name"] == "scroll_offset" for row in bookmark_columns):
+            # Absolute offsets have no useful cross-device conversion. Keep
+            # page bookmarks at the top of their saved page and derive a
+            # selection bookmark's position from its page-relative anchor.
+            conn.execute("PRAGMA foreign_keys = OFF")
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                table_sql = SCHEMA.split("CREATE TABLE IF NOT EXISTS bookmarks (", 1)[1]
+                table_sql = table_sql.split(";", 1)[0]
+                conn.execute("CREATE TABLE bookmarks_new (" + table_sql)
+                rows = conn.execute(
+                    """
+                    SELECT id, paper_id, kind, page_index, selected_text,
+                           selection_rects_json, note, created_at, updated_at
+                    FROM bookmarks
+                    """
+                ).fetchall()
+                for row in rows:
+                    page_position = 0.0
+                    if row["kind"] == "selection":
+                        try:
+                            rects = json.loads(row["selection_rects_json"] or "[]")
+                            if rects:
+                                rect = rects[0]
+                                page_position = 1 - (
+                                    float(rect["y"]) + float(rect["height"]) / 2
+                                )
+                        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                            pass
+                    page_position = min(1.0, max(0.0, page_position))
+                    conn.execute(
+                        """
+                        INSERT INTO bookmarks_new (
+                          id, paper_id, kind, page_index, page_position, selected_text,
+                          selection_rects_json, note, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            row["id"],
+                            row["paper_id"],
+                            row["kind"],
+                            row["page_index"],
+                            page_position,
+                            row["selected_text"],
+                            row["selection_rects_json"],
+                            row["note"],
+                            row["created_at"],
+                            row["updated_at"],
+                        ),
+                    )
+                conn.execute("DROP TABLE bookmarks")
+                conn.execute("ALTER TABLE bookmarks_new RENAME TO bookmarks")
+                conn.execute(
+                    "CREATE INDEX idx_bookmarks_paper "
+                    "ON bookmarks(paper_id, created_at DESC)"
+                )
+                conn.execute(
+                    "CREATE UNIQUE INDEX idx_bookmarks_page_unique "
+                    "ON bookmarks(paper_id, page_index) WHERE kind = 'page'"
+                )
+                if conn.execute("PRAGMA foreign_key_check").fetchall():
+                    raise RuntimeError("Bookmark migration violated foreign keys")
                 conn.commit()
             except Exception:
                 conn.rollback()

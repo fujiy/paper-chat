@@ -12,6 +12,7 @@ final class AppModel: ObservableObject {
     @Published var isSearching = false
     @Published var isLoadingMoreSearchResults = false
     @Published var hasMoreSearchResults = false
+    @Published var isSimulatorBookmarkReproMode = false
     @Published var searchResultTotal: Int?
     @Published var searchPaperCount: Int?
     @Published var errorMessage: String?
@@ -488,19 +489,26 @@ final class AppModel: ObservableObject {
         session.isChatPresented = true
     }
 
+    func presentSearch(in session: PaperSession) {
+        session.sidebarMode = .search
+        session.isChatPresented = true
+        session.pdfSearchFocusRequest += 1
+    }
+
     func presentBookmarks(in session: PaperSession) {
         session.sidebarMode = .bookmarks
         session.isChatPresented = true
         Task { await loadBookmarks(in: session) }
     }
 
-    func presentStructure(in session: PaperSession) {
-        session.sidebarMode = .structure
+    func presentNavigate(in session: PaperSession) {
+        session.sidebarMode = .navigate
         session.isChatPresented = true
         Task { await loadStructure(in: session) }
     }
 
     func loadStructure(in session: PaperSession) async {
+        guard !isSimulatorBookmarkReproMode else { return }
         guard !session.isStructureLoading else { return }
         session.isStructureLoading = true
         defer { session.isStructureLoading = false }
@@ -538,9 +546,7 @@ final class AppModel: ObservableObject {
     func openStructureAnchor(_ anchor: DocumentAnchor?, in session: PaperSession) {
         guard let anchor else { return }
         session.pageIndex = anchor.pageIndex
-        session.pdfViewportTarget = PDFViewportTarget(
-            token: UUID(), pageIndex: anchor.pageIndex, scrollOffset: 0
-        )
+        session.pdfViewportTarget = nil
         session.pdfHighlightTarget = PDFHighlightTarget(
             token: UUID(), query: nil, pageIndex: anchor.pageIndex,
             occurrenceIndex: nil, rects: anchor.rects
@@ -557,6 +563,7 @@ final class AppModel: ObservableObject {
     }
 
     func loadBookmarks(in session: PaperSession) async {
+        guard !isSimulatorBookmarkReproMode else { return }
         do {
             let overview = try await client.bookmarks(paperID: session.id)
             session.bookmarks = overview.bookmarks
@@ -568,13 +575,36 @@ final class AppModel: ObservableObject {
     }
 
     func addPageBookmark(in session: PaperSession, pageIndex: Int? = nil) async {
+        if isSimulatorBookmarkReproMode {
+            let targetPage = pageIndex ?? session.bookmarkPageIndex
+            let pagePosition = targetPage == session.bookmarkPageIndex
+                ? session.pagePosition
+                : 0
+            let timestamp = ISO8601DateFormatter().string(from: .now)
+            session.bookmarks.append(
+                PaperBookmark(
+                    id: UUID().uuidString,
+                    paperID: session.id,
+                    kind: .page,
+                    pageIndex: targetPage,
+                    pagePosition: pagePosition,
+                    selectedText: nil,
+                    selectionRects: [],
+                    note: "Local simulator bookmark",
+                    createdAt: timestamp,
+                    updatedAt: timestamp
+                )
+            )
+            sortBookmarks(in: session)
+            return
+        }
         do {
-            let targetPage = pageIndex ?? session.pageIndex
+            let targetPage = pageIndex ?? session.bookmarkPageIndex
             let bookmark = try await client.createBookmark(
                 paperID: session.id,
                 kind: .page,
                 pageIndex: targetPage,
-                scrollOffset: targetPage == session.pageIndex ? session.scrollOffset : 0,
+                pagePosition: targetPage == session.bookmarkPageIndex ? session.pagePosition : 0,
                 selectedText: nil,
                 selectionRects: []
             )
@@ -588,6 +618,7 @@ final class AppModel: ObservableObject {
     }
 
     func addSelectionBookmark(in session: PaperSession) async {
+        guard !isSimulatorBookmarkReproMode else { return }
         guard let selection = session.selectionSnapshot, !selection.rects.isEmpty else { return }
         do {
             let pageIndex = selection.rects.first?.pageIndex ?? session.pageIndex
@@ -595,7 +626,9 @@ final class AppModel: ObservableObject {
                 paperID: session.id,
                 kind: .selection,
                 pageIndex: pageIndex,
-                scrollOffset: session.scrollOffset,
+                pagePosition: selection.rects.first.map {
+                    min(max(1 - ($0.y + $0.height / 2), 0), 1)
+                } ?? session.pagePosition,
                 selectedText: selection.text,
                 selectionRects: selection.rects
             )
@@ -607,6 +640,7 @@ final class AppModel: ObservableObject {
     }
 
     func deleteBookmark(_ bookmark: PaperBookmark, in session: PaperSession) async {
+        guard !isSimulatorBookmarkReproMode else { return }
         do {
             try await client.deleteBookmark(id: bookmark.id)
             session.bookmarks.removeAll(where: { $0.id == bookmark.id })
@@ -618,13 +652,8 @@ final class AppModel: ObservableObject {
 
     func openBookmark(_ bookmark: PaperBookmark, in session: PaperSession) {
         session.pageIndex = bookmark.pageIndex
-        session.scrollOffset = bookmark.scrollOffset
-        session.pdfViewportTarget = PDFViewportTarget(
-            token: UUID(),
-            pageIndex: bookmark.pageIndex,
-            scrollOffset: bookmark.scrollOffset
-        )
         if bookmark.kind == .selection, !bookmark.selectionRects.isEmpty {
+            session.pdfViewportTarget = nil
             session.pdfHighlightTarget = PDFHighlightTarget(
                 token: UUID(),
                 query: bookmark.selectedText,
@@ -633,6 +662,11 @@ final class AppModel: ObservableObject {
                 rects: bookmark.selectionRects
             )
         } else {
+            session.pdfViewportTarget = PDFViewportTarget(
+                token: UUID(),
+                pageIndex: bookmark.pageIndex,
+                pagePosition: bookmark.pagePosition
+            )
             session.pdfHighlightTarget = nil
         }
         recordPageActivity(in: session, pageIndex: bookmark.pageIndex)
@@ -960,16 +994,19 @@ final class AppModel: ObservableObject {
         in session: PaperSession,
         pageIndex: Int,
         zoomScale: Double,
-        scrollOffset: Double
+        scrollOffset: Double,
+        pagePosition: Double? = nil
     ) {
         recordPageActivity(in: session, pageIndex: pageIndex)
         session.pageIndex = pageIndex
         session.zoomScale = zoomScale
         session.scrollOffset = scrollOffset
+        if let pagePosition { session.pagePosition = pagePosition }
         scheduleReadingStateSave(session)
     }
 
     private func scheduleReadingStateSave(_ session: PaperSession) {
+        guard !isSimulatorBookmarkReproMode else { return }
         saveTasks[session.id]?.cancel()
         saveTasks[session.id] = Task { [weak self, weak session] in
             try? await Task.sleep(for: .milliseconds(500))
@@ -990,6 +1027,7 @@ final class AppModel: ObservableObject {
     }
 
     private func startPageViewTracking(_ session: PaperSession) {
+        guard !isSimulatorBookmarkReproMode else { return }
         recordPageActivity(in: session, pageIndex: session.pageIndex)
         guard pageViewTasks[session.id] == nil else { return }
         pageViewTasks[session.id] = Task { [weak self, weak session] in
@@ -1009,6 +1047,7 @@ final class AppModel: ObservableObject {
     }
 
     private func recordPageActivity(in session: PaperSession, pageIndex: Int) {
+        guard !isSimulatorBookmarkReproMode else { return }
         let current = Date()
         guard var tracker = pageViewTrackers[session.id] else {
             pageViewTrackers[session.id] = PageViewTracker(
@@ -1039,6 +1078,7 @@ final class AppModel: ObservableObject {
     }
 
     private func checkpointPageView(_ session: PaperSession, at current: Date) {
+        guard !isSimulatorBookmarkReproMode else { return }
         guard var tracker = pageViewTrackers[session.id] else { return }
         let eligibleEnd = min(current, tracker.lastActivity.addingTimeInterval(90))
         let seconds = eligibleEnd.timeIntervalSince(tracker.checkpoint)

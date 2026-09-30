@@ -399,12 +399,12 @@ def test_bookmarks_selection_anchors_and_reading_suggestions(tmp_path, monkeypat
 
         page_bookmark = client.post(
             f"{base}/bookmarks",
-            json={"kind": "page", "page_index": 2, "scroll_offset": 120.5},
+            json={"kind": "page", "page_index": 2, "page_position": 0.35},
             headers=headers,
         )
         updated_page_bookmark = client.post(
             f"{base}/bookmarks",
-            json={"kind": "page", "page_index": 2, "scroll_offset": 200},
+            json={"kind": "page", "page_index": 2, "page_position": 0.4},
             headers=headers,
         )
         selection_bookmark = client.post(
@@ -412,6 +412,7 @@ def test_bookmarks_selection_anchors_and_reading_suggestions(tmp_path, monkeypat
             json={
                 "kind": "selection",
                 "page_index": 3,
+                "page_position": 0.77,
                 "selected_text": "A selected result",
                 "selection_rects": [
                     {
@@ -432,7 +433,17 @@ def test_bookmarks_selection_anchors_and_reading_suggestions(tmp_path, monkeypat
         after_delete = client.get(f"{base}/bookmarks", headers=headers).json()
         invalid_selection = client.post(
             f"{base}/bookmarks",
-            json={"kind": "selection", "page_index": 1, "selected_text": "missing anchor"},
+            json={
+                "kind": "selection",
+                "page_index": 1,
+                "page_position": 0.2,
+                "selected_text": "missing anchor",
+            },
+            headers=headers,
+        )
+        invalid_page_position = client.post(
+            f"{base}/bookmarks",
+            json={"kind": "page", "page_index": 2, "page_position": 1.01},
             headers=headers,
         )
 
@@ -440,14 +451,16 @@ def test_bookmarks_selection_anchors_and_reading_suggestions(tmp_path, monkeypat
     assert suggested["suggestions"][0]["page_index"] == 2
     assert page_bookmark.status_code == 201
     assert updated_page_bookmark.json()["id"] == page_bookmark.json()["id"]
-    assert updated_page_bookmark.json()["scroll_offset"] == 200
+    assert updated_page_bookmark.json()["page_position"] == 0.4
     assert selection_bookmark.status_code == 201
+    assert selection_bookmark.json()["page_position"] == 0.77
     assert selection_bookmark.json()["selection_rects"][0]["page_index"] == 3
     assert len(after_add["bookmarks"]) == 2
     assert after_add["suggestions"] == []
     assert deleted.status_code == 204
     assert after_delete["suggestions"][0]["page_index"] == 2
     assert invalid_selection.status_code == 422
+    assert invalid_page_position.status_code == 422
 
 
 def test_library_search_supports_pagination(tmp_path, monkeypatch):

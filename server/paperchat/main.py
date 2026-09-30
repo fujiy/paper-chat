@@ -139,7 +139,7 @@ class SelectionRectRequest(BaseModel):
 class BookmarkRequest(BaseModel):
     kind: Literal["page", "selection"]
     page_index: int = Field(ge=0)
-    scroll_offset: float = Field(default=0, ge=0)
+    page_position: float = Field(ge=0, le=1)
     selected_text: str | None = Field(default=None, max_length=20000)
     selection_rects: list[SelectionRectRequest] = Field(default_factory=list, max_length=100)
     note: str | None = Field(default=None, max_length=2000)
@@ -478,17 +478,17 @@ def create_bookmark(
             conn.execute(
                 """
                 INSERT INTO bookmarks (
-                  id, paper_id, kind, page_index, scroll_offset, selected_text,
+                  id, paper_id, kind, page_index, page_position, selected_text,
                   selection_rects_json, note, created_at, updated_at
                 ) VALUES (?, ?, 'page', ?, ?, NULL, '[]', ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET scroll_offset=excluded.scroll_offset,
+                ON CONFLICT(id) DO UPDATE SET page_position=excluded.page_position,
                   note=COALESCE(excluded.note, bookmarks.note), updated_at=excluded.updated_at
                 """,
                 (
                     bookmark_id,
                     paper_id,
                     payload.page_index,
-                    payload.scroll_offset,
+                    payload.page_position,
                     payload.note,
                     timestamp,
                     timestamp,
@@ -499,7 +499,7 @@ def create_bookmark(
             conn.execute(
                 """
                 INSERT INTO bookmarks (
-                  id, paper_id, kind, page_index, scroll_offset, selected_text,
+                  id, paper_id, kind, page_index, page_position, selected_text,
                   selection_rects_json, note, created_at, updated_at
                 ) VALUES (?, ?, 'selection', ?, ?, ?, ?, ?, ?, ?)
                 """,
@@ -507,7 +507,7 @@ def create_bookmark(
                     bookmark_id,
                     paper_id,
                     payload.page_index,
-                    payload.scroll_offset,
+                    payload.page_position,
                     payload.selected_text,
                     json.dumps([rect.model_dump() for rect in payload.selection_rects]),
                     payload.note,

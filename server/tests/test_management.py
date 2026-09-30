@@ -122,6 +122,57 @@ def test_nullable_paper_migration_preserves_history_and_foreign_keys(tmp_path):
         assert not conn.execute("SELECT * FROM messages").fetchall()
 
 
+def test_bookmark_offset_migration_to_page_positions(tmp_path):
+    path = tmp_path / "legacy-bookmarks.sqlite3"
+    legacy_schema = SCHEMA.replace(
+        "page_position REAL NOT NULL CHECK(page_position >= 0 AND page_position <= 1),",
+        "scroll_offset REAL NOT NULL DEFAULT 0,",
+    )
+    with sqlite3.connect(path) as conn:
+        conn.executescript(legacy_schema)
+        timestamp = now()
+        conn.execute(
+            "INSERT INTO papers (id,title,created_at,updated_at) VALUES ('p','P',?,?)",
+            (timestamp, timestamp),
+        )
+        conn.execute(
+            """INSERT INTO bookmarks
+            (id,paper_id,kind,page_index,scroll_offset,created_at,updated_at)
+            VALUES ('page','p','page',8,3520,?,?)""",
+            (timestamp, timestamp),
+        )
+        conn.execute(
+            """INSERT INTO bookmarks
+            (id,paper_id,kind,page_index,scroll_offset,selected_text,
+             selection_rects_json,created_at,updated_at)
+            VALUES ('selection','p','selection',8,3520,'anchor',?,?,?)""",
+            (
+                json.dumps([{
+                    "page_index": 8,
+                    "x": 0.1,
+                    "y": 0.25,
+                    "width": 0.3,
+                    "height": 0.2,
+                }]),
+                timestamp,
+                timestamp,
+            ),
+        )
+
+    init(path)
+    init(path)
+    with connect(path) as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(bookmarks)")}
+        assert "scroll_offset" not in columns
+        assert conn.execute(
+            "SELECT page_position FROM bookmarks WHERE id='page'"
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT page_position FROM bookmarks WHERE id='selection'"
+        ).fetchone()[0] == pytest.approx(0.65)
+        assert not conn.execute("PRAGMA foreign_key_check").fetchall()
+
+
 def test_runner_authorization_and_stream(tmp_path, monkeypatch):
     settings = Settings(
         CODEX_RUNNER_TOKEN="runner-only",

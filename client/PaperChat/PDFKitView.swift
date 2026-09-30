@@ -12,8 +12,10 @@ struct PDFViewportRange: Equatable {
 struct PDFKitView: NSViewRepresentable {
     let url: URL
     @Binding var pageIndex: Int
+    @Binding var bookmarkPageIndex: Int
     @Binding var zoomScale: Double
     @Binding var scrollOffset: Double
+    @Binding var pagePosition: Double
     @Binding var viewportRange: PDFViewportRange
     @Binding var selectedText: String?
     @Binding var selectionSnapshot: PDFSelectionSnapshot?
@@ -43,8 +45,10 @@ struct PDFKitView: NSViewRepresentable {
 struct PDFKitView: UIViewRepresentable {
     let url: URL
     @Binding var pageIndex: Int
+    @Binding var bookmarkPageIndex: Int
     @Binding var zoomScale: Double
     @Binding var scrollOffset: Double
+    @Binding var pagePosition: Double
     @Binding var viewportRange: PDFViewportRange
     @Binding var selectedText: String?
     @Binding var selectionSnapshot: PDFSelectionSnapshot?
@@ -334,6 +338,19 @@ extension PDFKitView {
             if parent.pageIndex != pageIndex { parent.pageIndex = pageIndex }
             if abs(parent.zoomScale - scale) > 0.005 { parent.zoomScale = scale }
             if abs(parent.scrollOffset - offset) > 0.5 { parent.scrollOffset = offset }
+            if parent.bookmarkPageIndex != pageIndex {
+                parent.bookmarkPageIndex = pageIndex
+            }
+            let pageBounds = page.bounds(for: .cropBox)
+            let pagePoint = view.convert(viewportCenter, to: page)
+            if pageBounds.height > 0 {
+                let pagePosition = Double(
+                    min(max((pageBounds.maxY - pagePoint.y) / pageBounds.height, 0), 1)
+                )
+                if abs(parent.pagePosition - pagePosition) > 0.001 {
+                    parent.pagePosition = pagePosition
+                }
+            }
             syncViewportRange()
         }
 
@@ -403,19 +420,57 @@ extension PDFKitView {
         }
 
         func applyViewportTarget(_ target: PDFViewportTarget?) {
-            guard let target, target.token != lastViewportToken else { return }
-            lastViewportToken = target.token
+            guard let target, target.token != lastViewportToken,
+                  view?.document?.page(at: target.pageIndex) != nil else { return }
             DispatchQueue.main.async { [weak self] in
-                guard let self, let view = self.view else { return }
+                guard let self, let view = self.view,
+                      let page = view.document?.page(at: target.pageIndex) else { return }
+                guard target.token != self.lastViewportToken else { return }
+                self.lastViewportToken = target.token
                 self.isRestoring = true
-                if self.lastPageIndex != target.pageIndex,
-                   let page = view.document?.page(at: target.pageIndex) {
-                    view.go(to: page)
-                    self.lastPageIndex = target.pageIndex
+                let pageBounds = page.bounds(for: .cropBox)
+                let point = CGPoint(
+                    x: pageBounds.midX,
+                    y: pageBounds.maxY - CGFloat(min(max(target.pagePosition, 0), 1)) * pageBounds.height
+                )
+                let destination = PDFDestination(page: page, at: point)
+                view.go(to: destination)
+                self.lastPageIndex = target.pageIndex
+                DispatchQueue.main.async { [weak self, weak view, weak page] in
+                    guard let self, let view, let page,
+                          self.view === view,
+                          target.token == self.lastViewportToken else { return }
+                    self.center(point, on: page, in: view)
+                    self.isRestoring = false
+                    self.syncState()
                 }
-                self.restoreScrollOffset(target.scrollOffset)
-                self.isRestoring = false
             }
+        }
+
+        private func center(_ pagePoint: CGPoint, on page: PDFPage, in view: PDFView) {
+            let pointInView = view.convert(pagePoint, from: page)
+            let verticalDelta = pointInView.y - view.bounds.midY
+            #if os(macOS)
+            guard let contentView = view.documentView?.enclosingScrollView?.contentView else {
+                return
+            }
+            contentView.scroll(
+                to: NSPoint(
+                    x: contentView.bounds.origin.x,
+                    y: contentView.bounds.origin.y + verticalDelta
+                )
+            )
+            contentView.enclosingScrollView?.reflectScrolledClipView(contentView)
+            #else
+            guard let scrollView = view.descendantScrollView else { return }
+            scrollView.setContentOffset(
+                CGPoint(
+                    x: scrollView.contentOffset.x,
+                    y: scrollView.contentOffset.y + verticalDelta
+                ),
+                animated: false
+            )
+            #endif
         }
 
         func applyHighlight(_ target: PDFHighlightTarget?) {

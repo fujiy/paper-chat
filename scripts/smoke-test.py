@@ -71,6 +71,36 @@ expect(status, 200, body)
 paper = json.loads(body)
 
 status, _, body = request(
+    "POST",
+    f"/api/papers/{paper['id']}/bookmarks",
+    token=access_token,
+    payload={
+        "kind": "selection",
+        "page_index": 2,
+        "page_position": 0.37,
+        "selected_text": "Deployment bookmark smoke test",
+        "selection_rects": [
+            {"page_index": 2, "x": 0.1, "y": 0.5, "width": 0.2, "height": 0.05}
+        ],
+    },
+)
+expect(status, 201, body)
+bookmark = json.loads(body)
+if bookmark.get("page_position") != 0.37:
+    raise RuntimeError("bookmark page position was not persisted")
+status, _, body = request(
+    "GET", f"/api/papers/{paper['id']}/bookmarks", token=access_token
+)
+expect(status, 200, body)
+bookmarks = json.loads(body)["bookmarks"]
+if not any(item["id"] == bookmark["id"] for item in bookmarks):
+    raise RuntimeError("persisted bookmark was not returned")
+status, _, body = request(
+    "DELETE", f"/api/bookmarks/{bookmark['id']}", token=access_token
+)
+expect(status, 204, body)
+
+status, _, body = request(
     "GET", f"/api/papers/{paper['id']}/structure", token=access_token
 )
 expect(status, 200, body)
@@ -165,6 +195,7 @@ print(
         {
             "status": "ok",
             "paper_title": paper["title"],
+            "bookmark_page_position": bookmark["page_position"],
             "pdf_range_bytes": len(pdf_chunk),
             "structure_status": structure["status"],
             "sse_events": events,

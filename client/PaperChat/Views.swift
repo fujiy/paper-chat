@@ -12,7 +12,7 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if model.isAuthenticated {
+            if model.isAuthenticated || model.isSimulatorBookmarkReproMode {
                 LibraryWorkspace()
             } else {
                 SignInView()
@@ -64,6 +64,13 @@ struct SignInView: View {
             }
             .formStyle(.grouped)
             .frame(maxWidth: 500)
+            #if DEBUG && os(iOS) && targetEnvironment(simulator)
+            Button("Load Local Bookmark Test Data", systemImage: "bookmark") {
+                model.loadSimulatorBookmarkReproFixture()
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("simulator.bookmark-repro")
+            #endif
         }
         .padding()
     }
@@ -320,26 +327,6 @@ struct WorkspaceDetail: View {
                     ) {
                         Task { await model.toggleStar(in: session) }
                     }
-                    Button("Find in PDF", systemImage: "magnifyingglass") {
-                        withAnimation(.snappy) {
-                            session.isPDFSearchPresented.toggle()
-                        }
-                    }
-                    Button("Document Structure", systemImage: "list.bullet.indent") {
-                        model.presentStructure(in: session)
-                    }
-                    Menu("Add Bookmark", systemImage: "bookmark") {
-                        if session.selectionSnapshot != nil {
-                            Button("Selected Text", systemImage: "text.quote") {
-                                model.presentBookmarks(in: session)
-                                Task { await model.addSelectionBookmark(in: session) }
-                            }
-                        }
-                        Button("Current Page", systemImage: "doc") {
-                            model.presentBookmarks(in: session)
-                            Task { await model.addPageBookmark(in: session) }
-                        }
-                    }
                     if let itemKey = session.paper.identifiers?
                         .first(where: { $0.kind == "zotero_item" })?.value,
                        let url = URL(string: "zotero://select/library/items/\(itemKey)") {
@@ -359,10 +346,8 @@ struct WorkspaceDetail: View {
                         withAnimation(.snappy(duration: 0.22)) {
                             if session.isChatPresented {
                                 session.isChatPresented = false
-                            } else if session.sidebarMode == .bookmarks {
-                                model.presentBookmarks(in: session)
                             } else {
-                                model.presentChat(in: session)
+                                session.isChatPresented = true
                             }
                         }
                     }
@@ -406,9 +391,9 @@ private struct WorkspaceShortcuts: View {
 
     var body: some View {
         HStack {
-            Button("Find in PDF") {
+            Button("Search in PDF") {
                 guard let session = model.activeSession else { return }
-                session.isPDFSearchPresented = true
+                model.presentSearch(in: session)
             }
             .keyboardShortcut("f", modifiers: .command)
             .disabled(model.activeSession == nil)
@@ -1269,6 +1254,7 @@ struct PDFPane: View {
                             get: { session.pageIndex },
                             set: { model.pageChanged($0, in: session) }
                         ),
+                        bookmarkPageIndex: $session.bookmarkPageIndex,
                         zoomScale: Binding(
                             get: { session.zoomScale },
                             set: {
@@ -1291,6 +1277,7 @@ struct PDFPane: View {
                                 )
                             }
                         ),
+                        pagePosition: $session.pagePosition,
                         viewportRange: $pdfViewportRange,
                         selectedText: $session.selectedText,
                         selectionSnapshot: $session.selectionSnapshot,
@@ -1316,13 +1303,6 @@ struct PDFPane: View {
                 } else {
                     ProgressView("Downloading PDF…")
                 }
-            }
-
-            if !isImmersive, session.isPDFSearchPresented {
-                PDFSearchPanel(session: session)
-                    .frame(width: 360)
-                    .padding(10)
-                    .transition(.move(edge: .top).combined(with: .opacity))
             }
 
         }
@@ -1360,7 +1340,7 @@ struct PDFPane: View {
     }
 }
 
-struct PDFSearchPanel: View {
+struct PDFSearchView: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var session: PaperSession
     @FocusState private var focused: Bool
@@ -1369,7 +1349,7 @@ struct PDFSearchPanel: View {
         VStack(spacing: 0) {
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Find in PDF", text: $session.pdfSearchQuery)
+                TextField("Search in PDF", text: $session.pdfSearchQuery)
                     .textFieldStyle(.plain)
                     .focused($focused)
                 if !session.pdfSearchQuery.isEmpty {
@@ -1377,16 +1357,12 @@ struct PDFSearchPanel: View {
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                Button("Close", systemImage: "xmark") {
-                    session.isPDFSearchPresented = false
-                }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.plain)
             }
-            .padding(11)
+            .padding(.horizontal, 14)
+            .frame(height: 48)
+            Divider()
 
             if !session.pdfSearchResults.isEmpty {
-                Divider()
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(session.pdfSearchResults.prefix(100)) { result in
@@ -1413,16 +1389,18 @@ struct PDFSearchPanel: View {
                         }
                     }
                 }
-                .frame(maxHeight: 330)
+            } else if session.pdfSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                ContentUnavailableView(
+                    "Search this PDF",
+                    systemImage: "magnifyingglass",
+                    description: Text("Enter a word or phrase to find it in this paper.")
+                )
             }
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.secondary.opacity(0.32), lineWidth: 0.5)
-        }
-        .shadow(color: .black.opacity(0.18), radius: 14, y: 5)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color.platformBackground)
         .onAppear { focused = true }
+        .onChange(of: session.pdfSearchFocusRequest) { _, _ in focused = true }
         .task(id: session.pdfSearchQuery) {
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled else { return }
@@ -1440,8 +1418,10 @@ struct ChatPane: View {
             Picker("Inspector", selection: sidebarModeBinding) {
                 Label("Chat", systemImage: "bubble.left.and.bubble.right")
                     .tag(PaperSidebarMode.chat)
+                Label("Search", systemImage: "magnifyingglass")
+                    .tag(PaperSidebarMode.search)
                 Label("Navigate", systemImage: "list.bullet.indent")
-                    .tag(PaperSidebarMode.structure)
+                    .tag(PaperSidebarMode.navigate)
                 Label("Bookmarks", systemImage: "bookmark")
                     .tag(PaperSidebarMode.bookmarks)
             }
@@ -1480,10 +1460,12 @@ struct ChatPane: View {
                             ConversationView(session: session)
                         }
                     }
+                case .search:
+                    PDFSearchView(session: session)
+                case .navigate:
+                    NavigateView(session: session)
                 case .bookmarks:
                     BookmarksView(session: session)
-                case .structure:
-                    StructureNavigationView(session: session)
                 }
             }
         }
@@ -1496,11 +1478,15 @@ struct ChatPane: View {
             set: { mode in
                 guard mode != session.sidebarMode else { return }
                 DispatchQueue.main.async {
-                    session.sidebarMode = mode
-                    if mode == .bookmarks {
-                        Task { await model.loadBookmarks(in: session) }
-                    } else if mode == .structure {
-                        Task { await model.loadStructure(in: session) }
+                    switch mode {
+                    case .chat:
+                        model.presentChat(in: session)
+                    case .search:
+                        model.presentSearch(in: session)
+                    case .navigate:
+                        model.presentNavigate(in: session)
+                    case .bookmarks:
+                        model.presentBookmarks(in: session)
                     }
                 }
             }
@@ -1801,62 +1787,119 @@ private struct DocumentOutlineBranchView: View {
     }
 }
 
-struct StructureNavigationView: View {
-    @EnvironmentObject private var model: AppModel
-    @ObservedObject var session: PaperSession
+private struct NavigateDisclosureSection<Content: View>: View {
+    let title: String
+    let systemImage: String
+    @Binding var isExpanded: Bool
+    private let content: () -> Content
+
+    init(
+        title: String,
+        systemImage: String,
+        isExpanded: Binding<Bool>,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.title = title
+        self.systemImage = systemImage
+        self._isExpanded = isExpanded
+        self.content = content
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("Document navigation", selection: $session.structureSection) {
-                Label("Outline", systemImage: "list.bullet.indent")
-                    .tag(StructureSection.outline)
-                Label("Figures", systemImage: "photo.on.rectangle")
-                    .tag(StructureSection.figures)
-                Label("References", systemImage: "books.vertical")
-                    .tag(StructureSection.references)
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 9) {
+                    Label(title, systemImage: systemImage)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
+                .font(.headline)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(10)
-            Divider()
+            .buttonStyle(.plain)
+            .help(isExpanded ? "Collapse \(title)" : "Expand \(title)")
 
-            switch session.structureSection {
-            case .outline:
-                if let mineru = session.mineruDocument {
-                    outlineList(mineru.outline)
-                } else if session.isStructureLoading {
-                    Spacer()
-                    ProgressView("Loading document structure…")
-                    Spacer()
-                } else {
-                    mineruUnavailable()
+            if isExpanded {
+                content()
+            }
+        }
+    }
+}
+
+struct NavigateView: View {
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject var session: PaperSession
+    @State private var isOutlineExpanded = true
+    @State private var isFiguresExpanded = false
+    @State private var isReferencesExpanded = false
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                NavigateDisclosureSection(
+                    title: "Outline",
+                    systemImage: "list.bullet.indent",
+                    isExpanded: $isOutlineExpanded
+                ) {
+                    if let mineru = session.mineruDocument {
+                        outlineList(mineru.outline)
+                    } else if session.isStructureLoading {
+                        ProgressView("Loading document structure…")
+                            .padding(12)
+                    } else {
+                        mineruUnavailable()
+                    }
                 }
-            case .figures:
-                if let mineru = session.mineruDocument {
-                    mineruFigureList(mineru.figures)
-                } else if session.isStructureLoading {
-                    Spacer()
-                    ProgressView("Loading document structure…")
-                    Spacer()
-                } else {
-                    mineruUnavailable()
+                Divider()
+
+                NavigateDisclosureSection(
+                    title: "Figures",
+                    systemImage: "photo.on.rectangle",
+                    isExpanded: $isFiguresExpanded
+                ) {
+                    if let mineru = session.mineruDocument {
+                        mineruFigureList(mineru.figures)
+                    } else if session.isStructureLoading {
+                        ProgressView("Loading document structure…")
+                            .padding(12)
+                    } else {
+                        mineruUnavailable()
+                    }
                 }
-            case .references:
-                if let structure = session.documentStructure {
-                    referenceContent(structure)
-                } else if session.isStructureLoading {
-                    Spacer()
-                    ProgressView("Loading references…")
-                    Spacer()
-                } else {
-                    unavailable(
-                        title: "References Not Available",
-                        systemImage: "books.vertical",
-                        description: "GROBID has not processed the references yet."
-                    )
+                Divider()
+
+                NavigateDisclosureSection(
+                    title: "References",
+                    systemImage: "books.vertical",
+                    isExpanded: $isReferencesExpanded
+                ) {
+                    if let structure = session.documentStructure {
+                        referenceContent(structure)
+                    } else if session.isStructureLoading {
+                        ProgressView("Loading references…")
+                            .padding(12)
+                    } else {
+                        unavailable(
+                            title: "References Not Available",
+                            systemImage: "books.vertical",
+                            description: "GROBID has not processed the references yet."
+                        )
+                    }
                 }
             }
         }
+        .background(Color.platformBackground)
     }
 
     private func mineruUnavailable() -> some View {
@@ -1891,40 +1934,38 @@ struct StructureNavigationView: View {
             if figures.isEmpty {
                 ContentUnavailableView("No Figures Found", systemImage: "photo")
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 6) {
-                        ForEach(figures) { figure in
-                            Button {
-                                model.openStructureAnchor(figure.anchor, in: session)
-                            } label: {
-                                HStack(alignment: .top, spacing: 10) {
-                                    if let url = figure.thumbnailURL,
-                                       let image = mineruThumbnail(at: url) {
-                                        image
-                                            .resizable()
-                                            .scaledToFit()
-                                            .frame(width: 94, height: 76)
-                                            .background(.white, in: RoundedRectangle(cornerRadius: 5))
-                                    } else {
-                                        Image(systemName: figure.kind == "table" ? "tablecells" : "photo")
-                                            .frame(width: 94, height: 76)
-                                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
-                                    }
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(figure.title).font(.callout.weight(.medium)).lineLimit(4)
-                                        Text("Page \(figure.anchor.pageIndex + 1)")
-                                            .font(.caption2).foregroundStyle(.secondary)
-                                    }
-                                    Spacer(minLength: 0)
+                LazyVStack(spacing: 6) {
+                    ForEach(figures) { figure in
+                        Button {
+                            model.openStructureAnchor(figure.anchor, in: session)
+                        } label: {
+                            HStack(alignment: .top, spacing: 10) {
+                                if let url = figure.thumbnailURL,
+                                   let image = mineruThumbnail(at: url) {
+                                    image
+                                        .resizable()
+                                        .scaledToFit()
+                                        .frame(width: 94, height: 76)
+                                        .background(.white, in: RoundedRectangle(cornerRadius: 5))
+                                } else {
+                                    Image(systemName: figure.kind == "table" ? "tablecells" : "photo")
+                                        .frame(width: 94, height: 76)
+                                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
                                 }
-                                .padding(8)
-                                .contentShape(Rectangle())
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(figure.title).font(.callout.weight(.medium)).lineLimit(4)
+                                    Text("Page \(figure.anchor.pageIndex + 1)")
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 0)
                             }
-                            .buttonStyle(.plain)
+                            .padding(8)
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
                     }
-                    .padding(10)
                 }
+                .padding(10)
             }
         }
     }
@@ -1944,28 +1985,26 @@ struct StructureNavigationView: View {
             if outline.isEmpty {
                 ContentUnavailableView("No Items Found", systemImage: "list.bullet")
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(outline) { node in
-                            Button {
-                                model.openStructureAnchor(node.anchor, in: session)
-                            } label: {
-                                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                    Text(node.title).font(.callout.weight(.medium)).lineLimit(3)
-                                    Spacer(minLength: 0)
-                                    Text(pageLabel(node.anchor))
-                                        .font(.caption2).foregroundStyle(.secondary)
-                                }
-                                .padding(.vertical, 7)
-                                .contentShape(Rectangle())
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(outline) { node in
+                        Button {
+                            model.openStructureAnchor(node.anchor, in: session)
+                        } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(node.title).font(.callout.weight(.medium)).lineLimit(3)
+                                Spacer(minLength: 0)
+                                Text(pageLabel(node.anchor))
+                                    .font(.caption2).foregroundStyle(.secondary)
                             }
-                            .buttonStyle(.plain)
+                            .padding(.vertical, 7)
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
                     }
-                    .padding(.vertical, 10)
-                    .padding(.leading, 16)
-                    .padding(.trailing, 10)
                 }
+                .padding(.vertical, 10)
+                .padding(.leading, 16)
+                .padding(.trailing, 10)
             }
         }
     }
@@ -1993,48 +2032,46 @@ struct StructureNavigationView: View {
             if references.isEmpty {
                 ContentUnavailableView("No References Found", systemImage: "books.vertical")
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 6) {
-                        ForEach(references) { reference in
-                            HStack(alignment: .top, spacing: 8) {
-                                Button {
-                                    model.openStructureAnchor(reference.anchor, in: session)
-                                } label: {
-                                    HStack(alignment: .top, spacing: 9) {
-                                        Text(reference.label)
-                                            .font(.caption.monospacedDigit())
+                LazyVStack(alignment: .leading, spacing: 6) {
+                    ForEach(references) { reference in
+                        HStack(alignment: .top, spacing: 8) {
+                            Button {
+                                model.openStructureAnchor(reference.anchor, in: session)
+                            } label: {
+                                HStack(alignment: .top, spacing: 9) {
+                                    Text(reference.label)
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                        .frame(minWidth: 22, alignment: .trailing)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(reference.title)
+                                            .font(.callout.weight(.medium))
+                                            .lineLimit(3)
+                                        Text(referenceSubtitle(reference))
+                                            .font(.caption2)
                                             .foregroundStyle(.secondary)
-                                            .frame(minWidth: 22, alignment: .trailing)
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text(reference.title)
-                                                .font(.callout.weight(.medium))
-                                                .lineLimit(3)
-                                            Text(referenceSubtitle(reference))
-                                                .font(.caption2)
-                                                .foregroundStyle(.secondary)
-                                                .lineLimit(2)
-                                        }
+                                            .lineLimit(2)
                                     }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .contentShape(Rectangle())
                                 }
-                                .buttonStyle(.plain)
-
-                                if reference.matchedAttachmentKey != nil {
-                                    Button("Open Library Paper", systemImage: "arrow.up.right.square") {
-                                        Task { await model.openMatchedReference(reference) }
-                                    }
-                                    .labelStyle(.iconOnly)
-                                    .buttonStyle(.borderless)
-                                    .help("Open matching paper from your library")
-                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
                             }
-                            .padding(8)
-                            .background(.quaternary.opacity(0.34), in: RoundedRectangle(cornerRadius: 8))
+                            .buttonStyle(.plain)
+
+                            if reference.matchedAttachmentKey != nil {
+                                Button("Open Library Paper", systemImage: "arrow.up.right.square") {
+                                    Task { await model.openMatchedReference(reference) }
+                                }
+                                .labelStyle(.iconOnly)
+                                .buttonStyle(.borderless)
+                                .help("Open matching paper from your library")
+                            }
                         }
+                        .padding(8)
+                        .background(.quaternary.opacity(0.34), in: RoundedRectangle(cornerRadius: 8))
                     }
-                    .padding(10)
                 }
+                .padding(10)
             }
         }
     }
@@ -2075,13 +2112,13 @@ struct StructureNavigationView: View {
     }
 
     private func unavailable(title: String, systemImage: String, description: String) -> some View {
-        VStack {
-            Spacer()
+        VStack(spacing: 10) {
             ContentUnavailableView(title, systemImage: systemImage, description: Text(description))
             Button("Refresh") { Task { await model.loadStructure(in: session) } }
                 .disabled(session.isStructureLoading)
-            Spacer()
         }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
     }
 
     private func pageLabel(_ anchor: DocumentAnchor?) -> String {

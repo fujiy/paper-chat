@@ -237,14 +237,9 @@ enum BookmarkKind: String, Codable, Hashable, Sendable {
 
 enum PaperSidebarMode: String, CaseIterable, Hashable, Sendable {
     case chat
-    case structure
+    case search
+    case navigate
     case bookmarks
-}
-
-enum StructureSection: String, CaseIterable, Hashable, Sendable {
-    case outline
-    case figures
-    case references
 }
 
 struct BookmarkSelectionRect: Codable, Hashable, Sendable {
@@ -351,7 +346,7 @@ struct PaperBookmark: Codable, Identifiable, Hashable, Sendable {
     let paperID: String
     let kind: BookmarkKind
     let pageIndex: Int
-    let scrollOffset: Double
+    let pagePosition: Double
     let selectedText: String?
     let selectionRects: [BookmarkSelectionRect]
     let note: String?
@@ -359,7 +354,7 @@ struct PaperBookmark: Codable, Identifiable, Hashable, Sendable {
     let updatedAt: String
 
     private enum CodingKeys: String, CodingKey {
-        case id, kind, pageIndex, scrollOffset, selectedText, selectionRects
+        case id, kind, pageIndex, pagePosition, selectedText, selectionRects
         case note, createdAt, updatedAt
         case paperID = "paperId"
     }
@@ -523,7 +518,7 @@ struct PDFHighlightTarget: Equatable, Sendable {
 struct PDFViewportTarget: Equatable, Sendable {
     let token: UUID
     let pageIndex: Int
-    let scrollOffset: Double
+    let pagePosition: Double
 }
 
 @MainActor
@@ -553,6 +548,8 @@ final class PaperSession: ChatSession {
     @Published var pdfURL: URL?
     @Published var zoomScale: Double
     @Published var scrollOffset: Double
+    @Published var bookmarkPageIndex = 0
+    @Published var pagePosition: Double = 0
     @Published var selectionSnapshot: PDFSelectionSnapshot?
     @Published var agentTextAvailability: AgentTextAvailability = .checking
     @Published var sidebarMode: PaperSidebarMode = .chat
@@ -561,10 +558,9 @@ final class PaperSession: ChatSession {
     @Published var documentStructure: DocumentStructure?
     @Published var mineruDocument: MinerUDocument?
     @Published var isStructureLoading = false
-    @Published var structureSection: StructureSection = .outline
-    @Published var isPDFSearchPresented = false
     @Published var pdfSearchQuery = ""
     @Published var pdfSearchResults: [PDFSearchResult] = []
+    @Published var pdfSearchFocusRequest = 0
     @Published var pdfHighlightTarget: PDFHighlightTarget?
     @Published var pdfViewportTarget: PDFViewportTarget?
 

@@ -20,6 +20,7 @@
 		A1000000000000000000000B /* SwiftMath in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000001 /* SwiftMath */; };
 		A1000000000000000000000C /* RichTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* RichTextView.swift */; };
 		A1000000000000000000000D /* MinerUCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000014 /* MinerUCache.swift */; };
+		A1000000000000000000000E /* SimulatorBookmarkReproFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000015 /* SimulatorBookmarkReproFixture.swift */; };
 		D10000000000000000000001 /* ChatKitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001; };
 		D10000000000000000000002 /* ChatKit.html in Resources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000002; };
 /* End PBXBuildFile section */
@@ -39,6 +40,7 @@
 		A20000000000000000000012 /* PaperChat.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PaperChat.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000013 /* RichTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RichTextView.swift; sourceTree = "<group>"; };
 		A20000000000000000000014 /* MinerUCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MinerUCache.swift; sourceTree = "<group>"; };
+		A20000000000000000000015 /* SimulatorBookmarkReproFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatorBookmarkReproFixture.swift; sourceTree = "<group>"; };
 		D20000000000000000000001 /* ChatKitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatKitView.swift; sourceTree = "<group>"; };
 		D20000000000000000000002 /* ChatKit.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = ChatKit.html; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -79,6 +81,7 @@
 				A20000000000000000000008 /* Views.swift */,
 				A20000000000000000000013 /* RichTextView.swift */,
 				A20000000000000000000014 /* MinerUCache.swift */,
+				A20000000000000000000015 /* SimulatorBookmarkReproFixture.swift */,
                 D20000000000000000000001 /* ChatKitView.swift */,
                 D20000000000000000000002 /* ChatKit.html */,
 				A20000000000000000000009 /* Info.plist */,
@@ -188,6 +191,7 @@
 				A10000000000000000000008 /* Views.swift in Sources */,
 				A1000000000000000000000C /* RichTextView.swift in Sources */,
 				A1000000000000000000000D /* MinerUCache.swift in Sources */,
+				A1000000000000000000000E /* SimulatorBookmarkReproFixture.swift in Sources */,
                 D10000000000000000000001 /* ChatKitView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

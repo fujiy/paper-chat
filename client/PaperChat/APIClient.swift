@@ -113,7 +113,7 @@ actor APIClient {
         paperID: String,
         kind: BookmarkKind,
         pageIndex: Int,
-        scrollOffset: Double,
+        pagePosition: Double,
         selectedText: String?,
         selectionRects: [BookmarkSelectionRect]
     ) async throws -> PaperBookmark {
@@ -123,7 +123,7 @@ actor APIClient {
             body: BookmarkCreateBody(
                 kind: kind,
                 pageIndex: pageIndex,
-                scrollOffset: max(0, scrollOffset),
+                pagePosition: min(max(pagePosition, 0), 1),
                 selectedText: selectedText,
                 selectionRects: selectionRects
             )
@@ -541,7 +541,7 @@ private struct UpdatedAt: Decodable { let updatedAt: String }
 private struct BookmarkCreateBody: Encodable {
     let kind: BookmarkKind
     let pageIndex: Int
-    let scrollOffset: Double
+    let pagePosition: Double
     let selectedText: String?
     let selectionRects: [BookmarkSelectionRect]
 }
