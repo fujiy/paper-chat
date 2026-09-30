@@ -41,6 +41,10 @@ CREATE TABLE IF NOT EXISTS messages (
   FOREIGN KEY(thread_id) REFERENCES threads(id) ON DELETE CASCADE,
   UNIQUE(thread_id, client_request_id)
 );
+CREATE TABLE IF NOT EXISTS message_progress (
+  message_id TEXT PRIMARY KEY, items_json TEXT NOT NULL DEFAULT '{}',
+  FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS device_sessions (
   id TEXT PRIMARY KEY, device_id TEXT NOT NULL, device_name TEXT NOT NULL,
   access_hash TEXT NOT NULL UNIQUE, access_expires_at INTEGER NOT NULL,

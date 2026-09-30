@@ -244,7 +244,6 @@ enum PaperSidebarMode: String, CaseIterable, Hashable, Sendable {
 enum StructureSection: String, CaseIterable, Hashable, Sendable {
     case outline
     case figures
-    case equations
     case references
 }
 
@@ -327,6 +326,19 @@ struct DocumentStructure: Codable, Hashable, Sendable {
     let links: [DocumentStructureLink]
 
     var isReady: Bool { status == "ready" }
+}
+
+struct MinerUFigure: Identifiable, Sendable {
+    let id: String
+    let title: String
+    let kind: String
+    let anchor: DocumentAnchor
+    let thumbnailURL: URL?
+}
+
+struct MinerUDocument: Sendable {
+    let outline: [DocumentOutlineNode]
+    let figures: [MinerUFigure]
 }
 
 struct PDFSelectionSnapshot: Equatable, Sendable {
@@ -547,6 +559,7 @@ final class PaperSession: ChatSession {
     @Published var bookmarks: [PaperBookmark] = []
     @Published var bookmarkSuggestions: [BookmarkSuggestion] = []
     @Published var documentStructure: DocumentStructure?
+    @Published var mineruDocument: MinerUDocument?
     @Published var isStructureLoading = false
     @Published var structureSection: StructureSection = .outline
     @Published var isPDFSearchPresented = false

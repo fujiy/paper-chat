@@ -201,6 +201,15 @@ actor APIClient {
         return (data, (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "ETag"))
     }
 
+    func downloadMinerU(paperID: String, etag: String?) async throws -> (Data?, String?) {
+        var request = try authorizedRequest("api/papers/\(paperID)/mineru")
+        if let etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
+        let (data, response) = try await data(for: request, authenticated: true)
+        if (response as? HTTPURLResponse)?.statusCode == 304 { return (nil, etag) }
+        try validate(response: response, data: data)
+        return (data, (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "ETag"))
+    }
+
     func revokeCurrentSession() async throws {
         guard let sessionID = tokens?.sessionId else { return }
         let request = try authorizedRequest("api/sessions/\(sessionID)", method: "DELETE")
@@ -278,6 +287,44 @@ actor APIClient {
                     continuation.finish(throwing: error)
                 }
             }
+        }
+    }
+
+    func chatKitRequest(body: String) -> AsyncThrowingStream<ChatKitNetworkEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    var request = try authorizedRequest("api/chatkit", method: "POST")
+                    request.httpBody = Data(body.utf8)
+                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    var result = try await session.bytes(for: request)
+                    if (result.1 as? HTTPURLResponse)?.statusCode == 401 {
+                        try await refresh()
+                        request = try withLatestAccessToken(request)
+                        result = try await session.bytes(for: request)
+                    }
+                    guard let response = result.1 as? HTTPURLResponse else {
+                        throw APIError.invalidResponse
+                    }
+                    let type = response.value(forHTTPHeaderField: "Content-Type") ?? "application/json"
+                    continuation.yield(.headers(response.statusCode, type))
+                    if type.contains("text/event-stream") {
+                        // Preserve SSE frame boundaries and Unicode without one JS call per byte.
+                        for try await line in result.0.lines {
+                            try Task.checkCancellation()
+                            if line.hasPrefix("data:") {
+                                continuation.yield(.chunk(line + "\n\n"))
+                            }
+                        }
+                    } else {
+                        var data = Data()
+                        for try await byte in result.0 { data.append(byte) }
+                        continuation.yield(.chunk(String(decoding: data, as: UTF8.self)))
+                    }
+                    continuation.finish()
+                } catch { continuation.finish(throwing: error) }
+            }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 
@@ -582,4 +629,10 @@ struct AnyEncodable: Encodable {
     private let encodeValue: (Encoder) throws -> Void
     init<T: Encodable>(_ value: T) { encodeValue = value.encode }
     func encode(to encoder: Encoder) throws { try encodeValue(encoder) }
+}
+
+
+enum ChatKitNetworkEvent: Sendable {
+    case headers(Int, String)
+    case chunk(String)
 }

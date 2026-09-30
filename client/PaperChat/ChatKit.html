@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<style>
+html, body { margin: 0; height: 100%; background: transparent; }
+openai-chatkit { display: block; width: 100%; height: 100%; }
+#status { position: absolute; inset: 20px; font: 14px system-ui; color: #777; pointer-events: none; }
+</style>
+<script src="https://cdn.platform.openai.com/deployments/chatkit/chatkit.js" async></script>
+</head>
+<body>
+<div id="status">Loading ChatKit…</div>
+<openai-chatkit id="chat"></openai-chatkit>
+<script>
+(() => {
+  const chat = document.getElementById('chat');
+  const status = document.getElementById('status');
+  const pending = new Map();
+  let config, mounted = false, ready = false, reloadID;
+  const notify = message => window.webkit.messageHandlers.paperchat.postMessage(message);
+  const fail = error => {
+    status.textContent = String(error?.message || error || 'ChatKit could not load.');
+    notify({kind: 'error', message: status.textContent});
+  };
+  const loadTimer = setTimeout(() => {
+    if (!ready) fail('ChatKit did not load. Check your connection and try Reload.');
+  }, 25000);
+  function nativeFetch(url, options = {}) {
+    // Only ChatKit API operations cross this bridge, never arbitrary URLs or credentials.
+    const id = crypto.randomUUID();
+    const body = JSON.parse(options.body || '{}');
+    body.metadata = {...body.metadata, paperchat: {
+      ...config.context, client_request_id: id,
+    }};
+    return new Promise((resolve, reject) => {
+      let controller;
+      const stream = new ReadableStream({
+        start(value) { controller = value; },
+        cancel() { notify({kind: 'cancel', id}); pending.delete(id); },
+      });
+      pending.set(id, {resolve, reject, controller, stream});
+      options.signal?.addEventListener('abort', () => {
+        const entry = pending.get(id);
+        if (!entry) return;
+        notify({kind: 'cancel', id});
+        const error = new DOMException('Cancelled', 'AbortError');
+        entry.reject(error); entry.controller.error(error); pending.delete(id);
+      }, {once: true});
+      notify({kind: 'fetch', id, body: JSON.stringify(body)});
+    });
+  }
+  window.paperchatReceive = event => {
+    const entry = pending.get(event.id);
+    if (!entry) return;
+    if (event.kind === 'headers') {
+      entry.resolve(new Response(entry.stream, {
+        status: event.status, headers: {'Content-Type': event.contentType},
+      }));
+    } else if (event.kind === 'chunk') {
+      entry.controller.enqueue(new TextEncoder().encode(event.text));
+    } else if (event.kind === 'done') {
+      entry.controller.close(); pending.delete(event.id);
+    } else if (event.kind === 'error') {
+      const error = new Error(event.text);
+      entry.reject(error); entry.controller.error(error); pending.delete(event.id);
+    }
+  };
+  function options() {
+    return {
+      api: {url: 'http://localhost/api/chatkit', domainKey: config.domainKey, fetch: nativeFetch},
+      initialThread: config.threadID || null,
+      theme: {colorScheme: config.colorScheme, radius: 'soft', density: 'compact'},
+      header: {enabled: true},
+      history: {enabled: true, showDelete: false, showRename: false},
+      threadItemActions: {feedback: false, retry: false},
+      composer: {models: config.models, placeholder: config.context.paper_id
+        ? `Ask about page ${config.context.current_page_index + 1}…` : 'Ask Codex…'},
+      startScreen: {greeting: config.context.paper_id ? 'Ask about this paper' : 'Management chat'},
+    };
+  }
+  window.paperchatConfigure = async value => {
+    const previous = config;
+    config = value;
+    if (!customElements.get('openai-chatkit')) return;
+    if (!mounted) {
+      mounted = true; reloadID = config.reloadID;
+      chat.setOptions(options());
+    } else {
+      if (ready && previous?.threadID !== config.threadID) {
+        await chat.setThreadId(config.threadID || null).catch(fail);
+      }
+      if (previous?.colorScheme !== config.colorScheme ||
+          previous?.context.current_page_index !== config.context.current_page_index ||
+          JSON.stringify(previous?.models) !== JSON.stringify(config.models)) {
+        chat.setOptions(options());
+      }
+      if (ready && reloadID !== config.reloadID) {
+        reloadID = config.reloadID;
+        status.textContent = '';
+        await chat.fetchUpdates().catch(fail);
+      }
+    }
+  };
+  customElements.whenDefined('openai-chatkit').then(() => {
+    if (config) window.paperchatConfigure(config);
+  });
+  chat.addEventListener('chatkit.ready', () => {
+    ready = true; clearTimeout(loadTimer); status.textContent = '';
+    if (config?.draft) chat.setComposerValue({text: config.draft}).catch(fail);
+  });
+  chat.addEventListener('chatkit.error', event => fail(event.detail.error));
+  chat.addEventListener('chatkit.thread.change', event => {
+    if (config) config.threadID = event.detail.threadId;
+    notify({kind: 'thread', threadID: event.detail.threadId});
+  });
+  chat.addEventListener('chatkit.response.start', () => notify({kind: 'sending', value: true}));
+  chat.addEventListener('chatkit.response.end', () => notify({kind: 'sending', value: false}));
+  // The page itself is bundled locally; all authenticated network access is native.
+  notify({kind: 'loaded'});
+})();
+</script>
+</body>
+</html>

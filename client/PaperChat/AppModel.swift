@@ -510,6 +510,29 @@ final class AppModel: ObservableObject {
             guard !Self.isCancellation(error) else { return }
             report(error)
         }
+        guard let pdfURL = session.pdfURL,
+              let attachmentKey = session.paper.identifiers?.first(where: { $0.kind == "zotero" })?.value
+        else { return }
+        do {
+            let cachedETag = await MinerUCache.shared.cachedETag(paperID: session.id)
+            let (data, etag) = try await client.downloadMinerU(paperID: session.id, etag: cachedETag)
+            if let data {
+                try await MinerUCache.shared.store(data, paperID: session.id, etag: etag)
+            }
+            session.mineruDocument = try await MinerUCache.shared.load(
+                paperID: session.id, attachmentKey: attachmentKey, pdfURL: pdfURL
+            )
+        } catch APIError.server(404, _) {
+            session.mineruDocument = nil
+        } catch {
+            guard !Self.isCancellation(error) else { return }
+            // Use a cached MinerU ZIP when Zotero or the network is unavailable.
+            if session.mineruDocument == nil {
+                session.mineruDocument = try? await MinerUCache.shared.load(
+                    paperID: session.id, attachmentKey: attachmentKey, pdfURL: pdfURL
+                )
+            }
+        }
     }
 
     func openStructureAnchor(_ anchor: DocumentAnchor?, in session: PaperSession) {
@@ -733,6 +756,28 @@ final class AppModel: ObservableObject {
     func appDidResignActive() {
         guard let session = activeSession else { return }
         stopPageViewTracking(session)
+    }
+
+    func chatKitRequest(body: String) async -> AsyncThrowingStream<ChatKitNetworkEvent, Error> {
+        await client.chatKitRequest(body: body)
+    }
+
+    func chatKitSelectedThread(_ id: String, in session: ChatSession) async {
+        do {
+            let thread = try await client.thread(id: id)
+            guard thread.paperID == (session.isManagement ? nil : session.id) else { return }
+            session.selectedThread = thread
+            session.chatRoute = .conversation
+            if !session.threads.contains(where: { $0.id == id }) { session.threads.insert(thread, at: 0) }
+            if let paper = session as? PaperSession { try await saveReadingState(paper) }
+        } catch { report(error) }
+    }
+
+    func chatKitFinished(in session: ChatSession) async {
+        session.isSending = false
+        session.draft = ""
+        await refreshConversation(in: session)
+        await refreshChatOverviews()
     }
 
     func send(in session: ChatSession) async {

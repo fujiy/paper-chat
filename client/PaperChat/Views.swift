@@ -106,6 +106,9 @@ struct LibraryWorkspace: View {
 
 struct LibrarySidebar: View {
     @EnvironmentObject private var model: AppModel
+    #if !os(macOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
 
     var body: some View {
         VStack(spacing: 0) {
@@ -196,6 +199,12 @@ struct LibrarySidebar: View {
             .padding(.vertical, 10)
         }
         .navigationTitle("")
+        #if !os(macOS)
+        // NavigationSplitView owns the default toggle, so remove it from the
+        // sidebar column where SwiftUI installs it. WorkspaceDetail supplies a
+        // stable regular-width toggle alongside the Back button.
+        .toolbar(removing: horizontalSizeClass == .regular ? .sidebarToggle : nil)
+        #endif
     }
 }
 
@@ -360,11 +369,6 @@ struct WorkspaceDetail: View {
                 }
             }
         }
-        #if !os(macOS)
-        // Own the regular-width toggle so its presence never depends on route or
-        // a previous split-view transition. Compact layouts keep system navigation.
-        .toolbar(removing: horizontalSizeClass == .regular ? .sidebarToggle : nil)
-        #endif
     }
 
     private var backButtonPlacement: ToolbarItemPlacement {
@@ -513,21 +517,13 @@ struct SearchField: View {
 
 struct LibrarySearchPage: View {
     @EnvironmentObject private var model: AppModel
-    @FocusState private var searchFocused: Bool
     @State private var expandedPaperIDs: Set<String> = []
 
     private var groups: [LibrarySearchPaper] { model.searchPapers }
 
     var body: some View {
         VStack(spacing: 0) {
-            SearchField(
-                text: $model.searchQuery,
-                prompt: "Search title, author, DOI, citekey, or full text"
-            )
-            .focused($searchFocused)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 14)
-            .background(.bar)
+            LibrarySearchBar()
 
             Divider()
 
@@ -596,8 +592,6 @@ struct LibrarySearchPage: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .onAppear { searchFocused = true }
-        .onChange(of: model.searchFocusToken) { searchFocused = true }
         .task(id: model.searchQuery) {
             model.prepareSearch(for: model.searchQuery)
             do {
@@ -615,6 +609,24 @@ struct LibrarySearchPage: View {
             ?? model.searchPapers.reduce(0) { $0 + $1.matchCount }
         let papers = model.searchPaperCount ?? groups.count
         return "All results loaded · \(papers) papers, \(matches) matches"
+    }
+}
+
+private struct LibrarySearchBar: View {
+    @EnvironmentObject private var model: AppModel
+    @FocusState private var searchFocused: Bool
+
+    var body: some View {
+        SearchField(
+            text: $model.searchQuery,
+            prompt: "Search title, author, DOI, citekey, or full text"
+        )
+        .focused($searchFocused)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 14)
+        .background(.bar)
+        .onAppear { searchFocused = true }
+        .onChange(of: model.searchFocusToken) { searchFocused = true }
     }
 }
 
@@ -1800,8 +1812,6 @@ struct StructureNavigationView: View {
                     .tag(StructureSection.outline)
                 Label("Figures", systemImage: "photo.on.rectangle")
                     .tag(StructureSection.figures)
-                Label("Equations", systemImage: "function")
-                    .tag(StructureSection.equations)
                 Label("References", systemImage: "books.vertical")
                     .tag(StructureSection.references)
             }
@@ -1810,29 +1820,60 @@ struct StructureNavigationView: View {
             .padding(10)
             Divider()
 
-            if session.isStructureLoading, session.documentStructure == nil {
-                Spacer()
-                ProgressView("Loading document structure…")
-                Spacer()
-            } else if let structure = session.documentStructure {
-                structureContent(structure)
-            } else {
-                unavailable(
-                    title: "Structure Not Available",
-                    systemImage: "doc.text.magnifyingglass",
-                    description: "GROBID has not processed this paper yet."
-                )
+            switch session.structureSection {
+            case .outline:
+                if let mineru = session.mineruDocument {
+                    outlineList(mineru.outline)
+                } else if session.isStructureLoading {
+                    Spacer()
+                    ProgressView("Loading document structure…")
+                    Spacer()
+                } else {
+                    mineruUnavailable()
+                }
+            case .figures:
+                if let mineru = session.mineruDocument {
+                    mineruFigureList(mineru.figures)
+                } else if session.isStructureLoading {
+                    Spacer()
+                    ProgressView("Loading document structure…")
+                    Spacer()
+                } else {
+                    mineruUnavailable()
+                }
+            case .references:
+                if let structure = session.documentStructure {
+                    referenceContent(structure)
+                } else if session.isStructureLoading {
+                    Spacer()
+                    ProgressView("Loading references…")
+                    Spacer()
+                } else {
+                    unavailable(
+                        title: "References Not Available",
+                        systemImage: "books.vertical",
+                        description: "GROBID has not processed the references yet."
+                    )
+                }
             }
         }
     }
 
+    private func mineruUnavailable() -> some View {
+        unavailable(
+            title: "MinerU Data Not Available",
+            systemImage: "doc.text.magnifyingglass",
+            description: "This paper has no MinerU outline or figures yet."
+        )
+    }
+
     @ViewBuilder
-    private func structureContent(_ structure: DocumentStructure) -> some View {
+    private func referenceContent(_ structure: DocumentStructure) -> some View {
         if structure.status == "processing" || structure.status == "pending" {
             unavailable(
                 title: "Analysis in Progress",
                 systemImage: "hourglass",
-                description: "This paper is queued for structure extraction."
+                description: "This paper is queued for reference extraction."
             )
         } else if structure.status == "failed" {
             unavailable(
@@ -1841,39 +1882,61 @@ struct StructureNavigationView: View {
                 description: structure.error ?? "GROBID could not analyze this PDF."
             )
         } else {
-            switch session.structureSection {
-            case .outline:
-                outlineList(structure.outline)
-            case .figures:
-                itemList(structure.figures) { item in
-                    let hierarchy = StructureHierarchy.artifact(item)
-                    structureRow(
-                        title: hierarchy.title,
-                        subtitle: compactSubtitle(item.caption, anchor: item.anchor),
-                        icon: item.kind == "table" ? "tablecells" : "photo",
-                        number: hierarchy.number,
-                        indentation: max(0, hierarchy.level - 1)
-                    ) {
-                        model.openStructureAnchor(item.anchor, in: session)
+            referenceList(structure.references)
+        }
+    }
+
+    private func mineruFigureList(_ figures: [MinerUFigure]) -> some View {
+        Group {
+            if figures.isEmpty {
+                ContentUnavailableView("No Figures Found", systemImage: "photo")
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 6) {
+                        ForEach(figures) { figure in
+                            Button {
+                                model.openStructureAnchor(figure.anchor, in: session)
+                            } label: {
+                                HStack(alignment: .top, spacing: 10) {
+                                    if let url = figure.thumbnailURL,
+                                       let image = mineruThumbnail(at: url) {
+                                        image
+                                            .resizable()
+                                            .scaledToFit()
+                                            .frame(width: 94, height: 76)
+                                            .background(.white, in: RoundedRectangle(cornerRadius: 5))
+                                    } else {
+                                        Image(systemName: figure.kind == "table" ? "tablecells" : "photo")
+                                            .frame(width: 94, height: 76)
+                                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
+                                    }
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(figure.title).font(.callout.weight(.medium)).lineLimit(4)
+                                        Text("Page \(figure.anchor.pageIndex + 1)")
+                                            .font(.caption2).foregroundStyle(.secondary)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(8)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
+                    .padding(10)
                 }
-            case .equations:
-                itemList(structure.formulas) { item in
-                    let hierarchy = StructureHierarchy.artifact(item)
-                    structureRow(
-                        title: hierarchy.title,
-                        subtitle: compactSubtitle(item.text, anchor: item.anchor),
-                        icon: "function",
-                        number: hierarchy.number,
-                        indentation: max(0, hierarchy.level - 1)
-                    ) {
-                        model.openStructureAnchor(item.anchor, in: session)
-                    }
-                }
-            case .references:
-                referenceList(structure.references)
             }
         }
+    }
+
+    private func mineruThumbnail(at url: URL) -> Image? {
+        #if os(iOS)
+        guard let image = UIImage(contentsOfFile: url.path) else { return nil }
+        return Image(uiImage: image)
+        #else
+        guard let image = NSImage(contentsOf: url) else { return nil }
+        return Image(nsImage: image)
+        #endif
     }
 
     private func outlineList(_ outline: [DocumentOutlineNode]) -> some View {
@@ -1883,13 +1946,20 @@ struct StructureNavigationView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(StructureHierarchy.outlineTree(outline)) { item in
-                            DocumentOutlineBranchView(
-                                item: item,
-                                subtitle: pageLabel(item.node.anchor)
-                            ) { node in
+                        ForEach(outline) { node in
+                            Button {
                                 model.openStructureAnchor(node.anchor, in: session)
+                            } label: {
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Text(node.title).font(.callout.weight(.medium)).lineLimit(3)
+                                    Spacer(minLength: 0)
+                                    Text(pageLabel(node.anchor))
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
+                                .padding(.vertical, 7)
+                                .contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain)
                         }
                     }
                     .padding(.vertical, 10)
@@ -2244,6 +2314,31 @@ struct ChatListView: View {
 }
 
 struct ConversationView: View {
+    @ObservedObject var session: ChatSession
+    @AppStorage("chatKitPrototypeEnabled") private var chatKitEnabled = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("Chat interface", selection: $chatKitEnabled) {
+                Text("Native").tag(false)
+                Text("ChatKit Preview").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .disabled(session.isSending)
+            Divider()
+            if chatKitEnabled {
+                ChatKitConversation(session: session)
+                    .id(session.id)
+            } else {
+                NativeConversationView(session: session)
+            }
+        }
+    }
+}
+
+struct NativeConversationView: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var session: ChatSession
 
@@ -2316,7 +2411,7 @@ struct ConversationView: View {
                 + "\(model.isConversationVisible(session))"
         ) {
             guard model.isConversationVisible(session) else { return }
-            await model.followConversation(in: session)
+            await model.refreshConversation(in: session)
         }
     }
 }

@@ -477,9 +477,6 @@ extension PDFKitView {
             guard let structure, structure.isReady else { return }
 
             var targets: [String: DocumentAnchor] = [:]
-            structure.outline.forEach { targets[$0.id] = $0.anchor }
-            structure.figures.forEach { targets[$0.id] = $0.anchor }
-            structure.formulas.forEach { targets[$0.id] = $0.anchor }
             structure.references.forEach { targets[$0.id] = $0.anchor }
 
             for link in structure.links {

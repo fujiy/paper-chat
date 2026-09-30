@@ -1,0 +1,268 @@
+import SwiftUI
+import WebKit
+
+struct ChatKitConversation: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject var session: ChatSession
+    @State private var reloadID = UUID()
+    @State private var webID = UUID()
+    @State private var error: String?
+    @AppStorage("chatKitDomainKey") private var domainKey = "local-dev"
+
+    private var configuration: String {
+        var context: [String: Any] = ["current_page_index": session.pageIndex]
+        if !session.isManagement { context["paper_id"] = session.id }
+        context["selected_text"] = session.selectedText
+        context["model"] = model.selectedModel?.model
+        context["effort"] = model.selectedEffortID
+        let value: [String: Any] = [
+            "threadID": session.selectedThread?.id as Any? ?? NSNull(),
+            "context": context,
+            "colorScheme": colorScheme == .dark ? "dark" : "light",
+            "domainKey": domainKey,
+            "draft": session.draft,
+            "models": model.models.flatMap { option -> [[String: Any]] in
+                let efforts = option.supportedReasoningEfforts.map(\.reasoningEffort)
+                return (efforts.isEmpty ? [option.defaultReasoningEffort] : efforts).map { effort in
+                    let pair = try! JSONSerialization.data(withJSONObject: [option.model, effort])
+                    return [
+                        "id": "paperchat:" + String(decoding: pair, as: UTF8.self),
+                        "label": "\(option.displayName) · \(effort)",
+                        "description": option.description,
+                        "default": option.id == model.selectedModelID && effort == model.selectedEffortID,
+                    ]
+                }
+            },
+            "reloadID": reloadID.uuidString,
+        ]
+        let data = (try? JSONSerialization.data(withJSONObject: value)) ?? Data("{}".utf8)
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                Button("Reload", systemImage: "arrow.clockwise") {
+                    if error != nil { error = nil; webID = UUID() }
+                    reloadID = UUID()
+                }
+                .labelStyle(.iconOnly)
+                .disabled(session.isSending)
+
+            }
+            .padding(.horizontal, 12).frame(height: 48)
+            Divider()
+            HStack {
+                Spacer()
+                if !session.isManagement { Text("Page \(session.pageIndex + 1)").font(.caption) }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .disabled(session.isSending)
+            if let selected = session.selectedText, !selected.isEmpty {
+                Text("“\(selected)”").font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12).padding(.bottom, 7)
+            }
+            if let error {
+                Text(error).font(.caption).foregroundStyle(.red)
+                    .textSelection(.enabled).padding(10)
+            }
+            ChatKitWebView(
+                configuration: configuration, model: model, session: session,
+                onError: { error = $0 }
+            )
+            .id(webID)
+        }
+    }
+}
+
+@MainActor
+private final class ChatKitCoordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
+    var configuration: String
+    let model: AppModel
+    let session: ChatSession
+    var onError: (String) -> Void
+    weak var webView: WKWebView?
+    var loaded = false
+    var tasks: [String: Task<Void, Never>] = [:]
+
+    init(configuration: String, model: AppModel, session: ChatSession, onError: @escaping (String) -> Void) {
+        self.configuration = configuration
+        self.model = model
+        self.session = session
+        self.onError = onError
+    }
+
+    func makeView() -> WKWebView {
+        let options = WKWebViewConfiguration()
+        options.websiteDataStore = .nonPersistent()
+        options.userContentController.add(self, name: "paperchat")
+        // ChatKit's entry transition can leave computed opacity at zero in WKWebView
+        // after its transition attributes are removed (verified on macOS 26.1).
+        // Expanded workflow contents exhibit the same WebKit transition issue.
+        // Scope the workaround to the ChatKit frame, thread and expanded workflows.
+        options.userContentController.addUserScript(WKUserScript(source: """
+            if (location.origin === 'https://cdn.platform.openai.com' &&
+                location.pathname.startsWith('/deployments/chatkit/')) {
+                const style = document.createElement('style');
+                style.textContent = '#chatkit-thread-container { opacity: 1 !important; } [data-workflow-expanded=true] * { opacity: 1 !important; }';
+                document.documentElement.appendChild(style);
+            }
+            """, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+        let view = WKWebView(frame: .zero, configuration: options)
+        view.navigationDelegate = self
+        view.uiDelegate = self
+        webView = view
+        if let url = Bundle.main.url(forResource: "ChatKit", withExtension: "html"),
+           let html = try? String(contentsOf: url, encoding: .utf8) {
+            // Bundled prototype page, with native networking; localhost is ChatKit's
+            // development origin. Production domain verification can be configured separately.
+            view.loadHTMLString(html, baseURL: URL(string: "http://localhost/"))
+        } else { onError("The bundled ChatKit page is missing.") }
+        return view
+    }
+
+    func update(_ configuration: String) {
+        guard self.configuration != configuration else { return }
+        self.configuration = configuration
+        configure()
+    }
+
+    func configure() {
+        guard loaded, let webView else { return }
+        let current = configuration
+        Task { [weak self] in
+            do {
+                _ = try await webView.callAsyncJavaScript(
+                    "await window.paperchatConfigure(JSON.parse(configuration));",
+                    arguments: ["configuration": current], in: nil, contentWorld: .page
+                )
+            } catch { self?.onError(error.localizedDescription) }
+        }
+    }
+
+    func deliver(_ value: [String: Any]) async {
+        guard let webView else { return }
+        _ = try? await webView.callAsyncJavaScript(
+            "window.paperchatReceive(event);", arguments: ["event": value],
+            in: nil, contentWorld: .page
+        )
+    }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        // The remote ChatKit iframe cannot call the native authenticated bridge directly.
+        guard message.frameInfo.isMainFrame,
+              let data = message.body as? [String: Any], let kind = data["kind"] as? String else { return }
+        switch kind {
+        case "loaded": loaded = true; configure()
+        case "error": onError(data["message"] as? String ?? "ChatKit could not load.")
+        case "thread":
+            if let id = data["threadID"] as? String {
+                Task { await model.chatKitSelectedThread(id, in: session) }
+            } else {
+                session.selectedThread = nil
+                session.messages = []
+                session.streamingMessage = nil
+            }
+        case "sending":
+            let sending = data["value"] as? Bool ?? false
+            session.isSending = sending
+            if !sending { Task { await model.chatKitFinished(in: session) } }
+        case "cancel":
+            if let id = data["id"] as? String { tasks[id]?.cancel(); tasks[id] = nil }
+        case "fetch":
+            guard let id = data["id"] as? String, let body = data["body"] as? String else { return }
+            tasks[id] = Task { [weak self] in
+                guard let self else { return }
+                defer { tasks[id] = nil }
+                do {
+                    for try await event in await model.chatKitRequest(body: body) {
+                        try Task.checkCancellation()
+                        switch event {
+                        case let .headers(status, contentType):
+                            await deliver(["id": id, "kind": "headers", "status": status, "contentType": contentType])
+                        case let .chunk(text):
+                            await deliver(["id": id, "kind": "chunk", "text": text])
+                        }
+                    }
+                    await deliver(["id": id, "kind": "done"])
+                } catch {
+                    await deliver(["id": id, "kind": "error", "text": error.localizedDescription])
+                }
+            }
+        default: break
+        }
+    }
+
+    func stop() {
+        tasks.values.forEach { $0.cancel() }
+        tasks.removeAll()
+        session.isSending = false
+        webView?.configuration.userContentController.removeScriptMessageHandler(forName: "paperchat")
+        webView?.stopLoading()
+    }
+
+    private func openLink(_ url: URL) {
+        if url.scheme == "https", url.host == "paperchat.invalid",
+           url.path.hasPrefix("/page/"), let page = Int(url.lastPathComponent), page > 0,
+           let paper = session as? PaperSession {
+            model.pageChanged(page - 1, in: paper)
+        } else if ["https", "http"].contains(url.scheme ?? "") {
+            #if os(macOS)
+            NSWorkspace.shared.open(url)
+            #else
+            UIApplication.shared.open(url)
+            #endif
+        }
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if let url = navigationAction.request.url,
+           navigationAction.navigationType == .linkActivated || url.host == "paperchat.invalid" {
+            openLink(url)
+            decisionHandler(.cancel)
+        } else if navigationAction.targetFrame?.isMainFrame == true,
+                  loaded, navigationAction.request.url?.scheme != "about" {
+            decisionHandler(.cancel)
+        } else { decisionHandler(.allow) }
+    }
+
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if let url = navigationAction.request.url { openLink(url) }
+        return nil
+    }
+}
+
+#if os(macOS)
+private struct ChatKitWebView: NSViewRepresentable {
+    let configuration: String
+    let model: AppModel
+    let session: ChatSession
+    let onError: (String) -> Void
+
+    func makeCoordinator() -> ChatKitCoordinator {
+        ChatKitCoordinator(configuration: configuration, model: model, session: session, onError: onError)
+    }
+    func makeNSView(context: Context) -> WKWebView { context.coordinator.makeView() }
+    func updateNSView(_ view: WKWebView, context: Context) { context.coordinator.update(configuration) }
+    static func dismantleNSView(_ view: WKWebView, coordinator: ChatKitCoordinator) { coordinator.stop() }
+}
+#else
+private struct ChatKitWebView: UIViewRepresentable {
+    let configuration: String
+    let model: AppModel
+    let session: ChatSession
+    let onError: (String) -> Void
+
+    func makeCoordinator() -> ChatKitCoordinator {
+        ChatKitCoordinator(configuration: configuration, model: model, session: session, onError: onError)
+    }
+    func makeUIView(context: Context) -> WKWebView { context.coordinator.makeView() }
+    func updateUIView(_ view: WKWebView, context: Context) { context.coordinator.update(configuration) }
+    static func dismantleUIView(_ view: WKWebView, coordinator: ChatKitCoordinator) { coordinator.stop() }
+}
+#endif

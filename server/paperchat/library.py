@@ -133,3 +133,22 @@ class ZoteroLibrary:
             f"/internal/attachments/{attachment_key}/pdf", headers=headers
         )
         return response.status_code, dict(response.headers), response.content
+
+    async def mineru(self, attachment_key: str, etag: str | None) -> tuple[int, dict, bytes]:
+        headers = self.headers
+        if etag:
+            headers["If-None-Match"] = etag
+        try:
+            async with httpx.AsyncClient(base_url=self.settings.zotero_library_url, timeout=90) as client:
+                response = await client.get(
+                    f"/internal/attachments/{attachment_key}/mineru", headers=headers
+                )
+        except httpx.TimeoutException as error:
+            raise ZoteroLibraryError("zotero_timeout", 504) from error
+        except httpx.RequestError as error:
+            raise ZoteroLibraryError("zotero_unavailable", 502) from error
+        if response.status_code == 404:
+            raise ZoteroLibraryError("mineru_not_found", 404)
+        if response.status_code not in (200, 304):
+            raise ZoteroLibraryError.from_response(response)
+        return response.status_code, dict(response.headers), response.content

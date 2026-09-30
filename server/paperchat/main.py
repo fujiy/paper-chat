@@ -942,6 +942,13 @@ async def send_message(
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
+@app.post("/api/chatkit")
+async def chatkit_endpoint(request: Request, session: Session, settings: SettingsDependency):
+    from .chatkit_bridge import handle_request
+
+    return await handle_request(await request.body(), session, settings)
+
+
 @app.get("/api/papers/{paper_id}/pdf")
 async def paper_pdf(
     paper_id: str,
@@ -964,6 +971,27 @@ async def paper_pdf(
         in {"content-type", "content-length", "content-range", "accept-ranges", "etag"}
     }
     return Response(content, status_code=status, headers=allowed, media_type="application/pdf")
+
+
+@app.get("/api/papers/{paper_id}/mineru")
+async def paper_mineru(
+    paper_id: str,
+    _: Session,
+    settings: SettingsDependency,
+    if_none_match: str | None = Header(default=None, alias="If-None-Match"),
+):
+    with connect(settings.resolved_database_path) as conn:
+        identifier = conn.execute(
+            "SELECT value FROM paper_identifiers WHERE paper_id = ? AND kind = 'zotero' LIMIT 1",
+            (paper_id,),
+        ).fetchone()
+    if not identifier:
+        raise HTTPException(404, "PDF source not found")
+    status, headers, content = await ZoteroLibrary(settings).mineru(
+        identifier["value"], if_none_match
+    )
+    allowed = {key: value for key, value in headers.items() if key.lower() == "etag"}
+    return Response(content, status_code=status, headers=allowed, media_type="application/zip")
 
 
 def run() -> None:

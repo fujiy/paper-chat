@@ -63,6 +63,11 @@ def client_for(tmp_path, monkeypatch) -> TestClient:
             "links": [],
         }
 
+    async def mineru(self, attachment_key, etag):
+        if etag == '"mineru-test"':
+            return 304, {"etag": etag}, b""
+        return 200, {"etag": '"mineru-test"'}, b"PK\x03\x04test"
+
     async def papers(self, limit=500, offset=0):
         return {
             "papers": [
@@ -114,6 +119,7 @@ def client_for(tmp_path, monkeypatch) -> TestClient:
         "paperchat.library.ZoteroLibrary.text_availability", text_availability
     )
     monkeypatch.setattr("paperchat.library.ZoteroLibrary.structure", structure)
+    monkeypatch.setattr("paperchat.library.ZoteroLibrary.mineru", mineru)
     monkeypatch.setattr("paperchat.library.ZoteroLibrary.papers", papers)
     monkeypatch.setattr("paperchat.library.ZoteroLibrary.search", search)
     return TestClient(app)
@@ -201,6 +207,21 @@ def test_local_zotero_open_rejects_invalid_attachment_key(tmp_path, monkeypatch)
         )
 
     assert response.status_code == 422
+
+
+def test_mineru_archive_is_proxied_with_conditional_etag(tmp_path, monkeypatch):
+    with client_for(tmp_path, monkeypatch) as client:
+        headers = {"Authorization": f"Bearer {register(client)['access_token']}"}
+        paper = client.post(
+            "/api/papers/resolve", json={"attachment_key": "ATT1"}, headers=headers
+        ).json()
+        path = f"/api/papers/{paper['id']}/mineru"
+        archive = client.get(path, headers=headers)
+        cached = client.get(path, headers={**headers, "If-None-Match": '"mineru-test"'})
+    assert archive.status_code == 200
+    assert archive.content == b"PK\x03\x04test"
+    assert archive.headers["etag"] == '"mineru-test"'
+    assert cached.status_code == 304
 
 
 def test_paper_thread_reading_state_and_streaming_chat(tmp_path, monkeypatch):
