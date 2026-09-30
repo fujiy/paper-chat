@@ -2315,26 +2315,10 @@ struct ChatListView: View {
 
 struct ConversationView: View {
     @ObservedObject var session: ChatSession
-    @AppStorage("chatKitPrototypeEnabled") private var chatKitEnabled = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("Chat interface", selection: $chatKitEnabled) {
-                Text("Native").tag(false)
-                Text("ChatKit Preview").tag(true)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .disabled(session.isSending)
-            Divider()
-            if chatKitEnabled {
-                ChatKitConversation(session: session)
-                    .id(session.id)
-            } else {
-                NativeConversationView(session: session)
-            }
-        }
+        ChatKitConversation(session: session)
+            .id(session.id)
     }
 }
 

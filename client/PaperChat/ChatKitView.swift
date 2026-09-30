@@ -5,8 +5,6 @@ struct ChatKitConversation: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var session: ChatSession
-    @State private var reloadID = UUID()
-    @State private var webID = UUID()
     @State private var error: String?
     @AppStorage("chatKitDomainKey") private var domainKey = "local-dev"
 
@@ -34,7 +32,6 @@ struct ChatKitConversation: View {
                     ]
                 }
             },
-            "reloadID": reloadID.uuidString,
         ]
         let data = (try? JSONSerialization.data(withJSONObject: value)) ?? Data("{}".utf8)
         return String(decoding: data, as: UTF8.self)
@@ -42,24 +39,6 @@ struct ChatKitConversation: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                Button("Reload", systemImage: "arrow.clockwise") {
-                    if error != nil { error = nil; webID = UUID() }
-                    reloadID = UUID()
-                }
-                .labelStyle(.iconOnly)
-                .disabled(session.isSending)
-
-            }
-            .padding(.horizontal, 12).frame(height: 48)
-            Divider()
-            HStack {
-                Spacer()
-                if !session.isManagement { Text("Page \(session.pageIndex + 1)").font(.caption) }
-            }
-            .padding(.horizontal, 12).padding(.vertical, 7)
-            .disabled(session.isSending)
             if let selected = session.selectedText, !selected.isEmpty {
                 Text("“\(selected)”").font(.caption).foregroundStyle(.secondary)
                     .lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
@@ -73,7 +52,6 @@ struct ChatKitConversation: View {
                 configuration: configuration, model: model, session: session,
                 onError: { error = $0 }
             )
-            .id(webID)
         }
     }
 }
@@ -97,7 +75,8 @@ private final class ChatKitCoordinator: NSObject, WKScriptMessageHandler, WKNavi
 
     func makeView() -> WKWebView {
         let options = WKWebViewConfiguration()
-        options.websiteDataStore = .nonPersistent()
+        // Reuse WebKit's HTTP cache when the inspector recreates this view.
+        options.websiteDataStore = .default()
         options.userContentController.add(self, name: "paperchat")
         // ChatKit's entry transition can leave computed opacity at zero in WKWebView
         // after its transition attributes are removed (verified on macOS 26.1).
