@@ -1,0 +1,33 @@
+client/PaperChat/MinerUCache.swift
+  s_8e079f659aaa8e::t_265904e9d4fb42 51,57,64,75-76,78-81,83,87,298,304,307-310
+  s_8e079f659aaa8e::t_cecdf2dbb5d664 311
+AGENTS.md
+  s_62e0f43303cf2c::t_8e60b64ebf2488 3-8
+client/PaperChat/Views.swift
+  s_62e0f43303cf2c::t_8e315b60665d28 1199,1223-1229
+  s_8e079f659aaa8e::t_898b75881cb596 1716,1996-2001,2009
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "889eba1122b9ff979a1362fea60761cbe23315af",
+  "prompts": {},
+  "sessions": {
+    "s_62e0f43303cf2c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0f197-2119-7873-9fda-9f2241b17981",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Yuki Fujihara <mail@fujiy.dev>"
+    },
+    "s_8e079f659aaa8e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0f19c-ee10-72a0-be5e-4bb99778bd2b",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Yuki Fujihara <mail@fujiy.dev>"
+    }
+  }
+}
