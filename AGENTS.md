@@ -1,5 +1,11 @@
 # PaperChat repository instructions
 
+## iOS and SwiftUI changes
+
+- Never publish SwiftUI state synchronously from a view-update or layout pass. This includes changing `@State`, `@Binding`, or `@Published` values from `UIViewRepresentable.updateUIView`, `layoutSubviews`, `viewDidLayoutSubviews`, or UIKit/PDFKit callbacks that can run during those passes.
+- When a UIKit or PDFKit callback needs to update SwiftUI state, defer the callback to a later main-queue turn and coalesce repeated layout notifications where practical. Read the latest UIKit geometry when the deferred callback runs, and avoid publishing unchanged values.
+- Keep `updateUIView` focused on reconciling UIKit view properties with SwiftUI inputs; route UIKit-to-SwiftUI state synchronization through deferred callbacks.
+
 ## Server changes
 
 - Changes under `server/`, `Dockerfile`, `compose.yaml`, or server-facing deployment scripts are not complete at local implementation alone. Unless the user explicitly asks not to deploy, carry the work through deployment to the configured home server.

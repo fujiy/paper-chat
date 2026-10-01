@@ -48,20 +48,20 @@ actor MinerUCache {
             StructuredContent.self, from: try zip.member("structured_content.json")
         )
         let allHeadings = content.pages.flatMap { page in
-            page.blocks.filter { ["doc_title", "paragraph_title"].contains($0.type) }
+            page.blocks.filter(\.isHeading)
                 .map { (page.pageIdx, $0) }
         }
         let occurrences = Dictionary(grouping: allHeadings, by: { $0.1.content })
         var outline: [DocumentOutlineNode] = []
         var figures: [MinerUFigure] = []
-        var chapterID: String?
+        var headingStack: [(level: Int, id: String)] = []
         let pdf = PDFDocument(url: pdfURL)
         let thumbnails = directory.appending(path: "mineru-thumbnails", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: thumbnails, withIntermediateDirectories: true)
 
         for page in content.pages {
             for block in page.blocks {
-                if block.type == "doc_title" || block.type == "paragraph_title" {
+                if block.isHeading {
                     let title = block.content.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !title.isEmpty else { continue }
                     if block.type == "doc_title" && page.pageIdx == 0 { continue }
@@ -72,15 +72,19 @@ actor MinerUCache {
                         of: #"(?i)^(?:\d+(?:\.\d+)*\s+)?(?:proposition|theorem|lemma|corollary|definition|remarks?)\b"#,
                         options: .regularExpression
                     ) != nil { continue }
-                    var level = headingLevel(title, type: block.type)
-                    if level > 1 && chapterID == nil { level = 1 }
+                    let level = block.textLevel.flatMap { $0 > 0 ? $0 : nil }
+                        ?? headingLevel(title, type: block.type)
                     let id = "mineru-heading-\(page.pageIdx)-\(outline.count)"
-                    if level == 1 { chapterID = id }
+                    while let last = headingStack.last, last.level >= level {
+                        headingStack.removeLast()
+                    }
+                    let parentID = headingStack.last?.id
                     outline.append(DocumentOutlineNode(
-                        id: id, parentID: level > 1 ? chapterID : nil,
+                        id: id, parentID: parentID,
                         title: title, level: level,
                         anchor: anchor(page: page.pageIdx, bbox: block.bbox)
                     ))
+                    headingStack.append((level: level, id: id))
                 } else if ["image", "chart", "table"].contains(block.type),
                           let position = anchor(page: page.pageIdx, bbox: block.bbox) {
                     let id = "mineru-figure-\(page.pageIdx)-\(figures.count)"
@@ -291,12 +295,19 @@ private struct StructuredContent: Decodable {
     struct Block: Decodable {
         let type: String
         let content: String
+        let textLevel: Int?
         let bbox: [Double]?
         let imageSource: String?
         let captions: [Caption]?
         enum CodingKeys: String, CodingKey {
             case type, content, bbox, captions
+            case textLevel = "text_level"
             case imageSource = "image_source"
+        }
+
+        var isHeading: Bool {
+            ["doc_title", "paragraph_title"].contains(type)
+                || (["text", "title"].contains(type) && (textLevel ?? 0) > 0)
         }
     }
 

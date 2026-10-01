@@ -1196,6 +1196,7 @@ private final class KeyboardLayoutMonitorInstallerView: UIView, UIGestureRecogni
 private final class KeyboardTrackingContainer: UIView {
     var onLayout: (@MainActor (CGRect) -> Void)?
     private let trackingView = UIView()
+    private var layoutUpdateScheduled = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1219,7 +1220,13 @@ private final class KeyboardTrackingContainer: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        onLayout?(trackingView.frame)
+        guard !layoutUpdateScheduled else { return }
+        layoutUpdateScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.layoutUpdateScheduled = false
+            self.onLayout?(self.trackingView.frame)
+        }
     }
 }
 #endif
@@ -1706,7 +1713,7 @@ private struct DocumentOutlineBranchView: View {
     let item: DocumentOutlineTreeNode
     let subtitle: String
     let action: (DocumentOutlineNode) -> Void
-    @State private var isExpanded = true
+    @State private var isExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -1986,25 +1993,20 @@ struct NavigateView: View {
                 ContentUnavailableView("No Items Found", systemImage: "list.bullet")
             } else {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(outline) { node in
-                        Button {
+                    ForEach(StructureHierarchy.outlineTree(outline)) { item in
+                        DocumentOutlineBranchView(
+                            item: item,
+                            subtitle: item.node.anchor.map { "Page \($0.pageIndex + 1)" }
+                                ?? "Location unavailable"
+                        ) { node in
                             model.openStructureAnchor(node.anchor, in: session)
-                        } label: {
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text(node.title).font(.callout.weight(.medium)).lineLimit(3)
-                                Spacer(minLength: 0)
-                                Text(pageLabel(node.anchor))
-                                    .font(.caption2).foregroundStyle(.secondary)
-                            }
-                            .padding(.vertical, 7)
-                            .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.vertical, 10)
                 .padding(.leading, 16)
                 .padding(.trailing, 10)
+                .id(session.id)
             }
         }
     }
