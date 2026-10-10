@@ -48,8 +48,10 @@ struct PDFInitialLayoutCheck {
             let root = PDFKitView(
                 url: url,
                 pageIndex: Binding(get: { state.page }, set: { state.page = $0 }),
+                bookmarkPageIndex: .constant(0),
                 zoomScale: Binding(get: { state.scale }, set: { state.scale = $0 }),
                 scrollOffset: Binding(get: { state.offset }, set: { state.offset = $0 }),
+                pagePosition: .constant(0),
                 viewportRange: .constant(.full), selectedText: .constant(nil),
                 selectionSnapshot: .constant(nil), highlightTarget: nil,
                 viewportTarget: nil, documentStructure: nil, isImmersive: false,

@@ -18,6 +18,19 @@ struct RootView: View {
                 SignInView()
             }
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if model.isOffline, model.isAuthenticated {
+                HStack(spacing: 8) {
+                    Label("Offline · Saved papers available", systemImage: "wifi.slash")
+                        .font(.caption)
+                    Spacer()
+                    Button("Reconnect") { Task { await model.refreshLibrary() } }
+                        .font(.caption)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .background(.regularMaterial)
+            }
+        }
         .dynamicTypeSize(.xSmall ... .xxxLarge)
         .overlay {
             if model.isBusy {
@@ -511,6 +524,10 @@ struct LibrarySearchPage: View {
     var body: some View {
         VStack(spacing: 0) {
             LibrarySearchBar()
+            if model.isOffline {
+                Text("Searching saved titles and authors on this device")
+                    .font(.caption).foregroundStyle(.secondary).padding(.bottom, 8)
+            }
 
             Divider()
 

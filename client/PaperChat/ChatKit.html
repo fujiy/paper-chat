@@ -15,7 +15,7 @@ openai-chatkit { display: block; width: 100%; height: 100%; }
 <openai-chatkit id="chat"></openai-chatkit>
 <script>
 (() => {
-  const chat = document.getElementById('chat');
+  let chat = document.getElementById('chat');
   const status = document.getElementById('status');
   const pending = new Map();
   let config, mounted = false, ready = false;
@@ -69,6 +69,7 @@ openai-chatkit { display: block; width: 100%; height: 100%; }
   };
   function options() {
     return {
+      disableTelemetry: true,
       api: {url: 'http://localhost/api/chatkit', domainKey: config.domainKey, fetch: nativeFetch},
       initialThread: config.threadID || null,
       theme: {colorScheme: config.colorScheme, radius: 'soft', density: 'compact'},
@@ -84,6 +85,15 @@ openai-chatkit { display: block; width: 100%; height: 100%; }
     const previous = config;
     config = value;
     if (!customElements.get('openai-chatkit')) return;
+    if (mounted && previous?.offline !== config.offline) {
+      // ChatKit caches thread reads internally. A fresh instance ensures the
+      // connection transition loads the native cache's locked/unlocked status.
+      const replacement = document.createElement('openai-chatkit');
+      replacement.id = 'chat';
+      chat.replaceWith(replacement);
+      chat = replacement; mounted = false; ready = false;
+      bindEvents();
+    }
     if (!mounted) {
       mounted = true;
       chat.setOptions(options());
@@ -93,7 +103,8 @@ openai-chatkit { display: block; width: 100%; height: 100%; }
       }
       if (previous?.colorScheme !== config.colorScheme ||
           previous?.context.current_page_index !== config.context.current_page_index ||
-          JSON.stringify(previous?.models) !== JSON.stringify(config.models)) {
+          JSON.stringify(previous?.models) !== JSON.stringify(config.models) ||
+          previous?.offline !== config.offline) {
         chat.setOptions(options());
       }
     }
@@ -101,17 +112,26 @@ openai-chatkit { display: block; width: 100%; height: 100%; }
   customElements.whenDefined('openai-chatkit').then(() => {
     if (config) window.paperchatConfigure(config);
   });
-  chat.addEventListener('chatkit.ready', () => {
-    ready = true; clearTimeout(loadTimer); status.textContent = '';
-    if (config?.draft) chat.setComposerValue({text: config.draft}).catch(fail);
-  });
-  chat.addEventListener('chatkit.error', event => fail(event.detail.error));
-  chat.addEventListener('chatkit.thread.change', event => {
-    if (config) config.threadID = event.detail.threadId;
-    notify({kind: 'thread', threadID: event.detail.threadId});
-  });
-  chat.addEventListener('chatkit.response.start', () => notify({kind: 'sending', value: true}));
-  chat.addEventListener('chatkit.response.end', () => notify({kind: 'sending', value: false}));
+  function bindEvents() {
+    const source = chat;
+    const listen = (name, handler) => source.addEventListener(name, event => {
+      if (source === chat) handler(event);
+    });
+    listen('chatkit.ready', () => {
+      ready = true; clearTimeout(loadTimer); status.textContent = '';
+      if (config?.draft) chat.setComposerValue({text: config.draft}).catch(fail);
+    });
+    listen('chatkit.error', event => fail(event.detail.error));
+    listen('chatkit.thread.change', event => {
+      if (config) config.threadID = event.detail.threadId;
+      notify({kind: 'thread', threadID: event.detail.threadId});
+    });
+    listen('chatkit.response.start', () => notify({kind: 'sending', value: true}));
+    // Native completion refreshes the saved protocol responses directly,
+    // avoiding ChatKit's internal cache of pre-generation thread reads.
+    listen('chatkit.response.end', () => notify({kind: 'sending', value: false}));
+  }
+  bindEvents();
   // The page itself is bundled locally; all authenticated network access is native.
   notify({kind: 'loaded'});
 })();

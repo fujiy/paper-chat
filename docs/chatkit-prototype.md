@@ -1,32 +1,51 @@
 # ChatKit prototype
 
-The chat interface has a **Native / ChatKit Preview** switch. Native remains the
-initial default. The choice is saved on each device. Paper and management chats
-use the same existing thread IDs, messages, SQLite database and Codex runner.
-No history migration or additional OpenAI API key is required.
+The chat interface uses ChatKit for paper and management conversations. Both
+share the existing thread IDs, SQLite database and Codex runner. No additional
+OpenAI API key or history migration is required.
 
-## Try it
+## Offline reading and chat
 
-Build and run the PaperChat Xcode target, open a paper chat or create a management
-chat, and select **ChatKit Preview**. The standard ChatKit history panel and header handle conversation selection and
-new chats. The standard composer picker lists each available model and reasoning
-effort combination. Reload remains a native button. Current PDF page and selected text are sent with each
-message. Clicking a page citation calls back into the native PDF reader.
+After a successful online visit, Recent, Starred, Library and chat overviews are
+saved per server. Downloaded PDFs open from local storage before any metadata,
+thread, bookmark or structure refresh. Open paper tabs and the active paper are
+restored on launch. Reading positions are saved locally, coalesced, and uploaded
+on reconnect; an acknowledgement cannot discard a newer local position.
 
-Open the conversation again, or use **Reload**, to fetch saved messages. The
-prototype does not subscribe to the real-time thread event endpoint. Native chat
-also now refreshes on opening instead of subscribing. A conversation being
-answered on another device is locked until a reload observes its completion.
+Bookmarks and document structures already retrieved are available offline.
+Library search falls back to saved titles and authors; PDF text search remains
+local. Star and bookmark mutations, new AI answers, and unsaved PDFs require a
+connection. Reading statistics are not queued for offline replay.
 
-Switch back to **Native** to compare the same saved conversation. Switching is
-disabled while the current view is sending. Unsaved text typed into ChatKit is
-not exported back to the native input field; send or copy the draft before
-switching interfaces or leaving the conversation.
+ChatKit UI assets (including math/fonts) and successful read-only ChatKit
+responses are saved on the device. A loopback-only HTTP server serves the bundled
+wrapper and downloaded assets. The iframe uses `127.0.0.1`, while the wrapper uses
+`localhost`, preserving their origin boundary. A Content Security Policy blocks
+external WebKit requests; authenticated operations still use the native bridge.
+The public UI entry script is pinned after its first download, retaining its
+matching hashed assets. The `chatkit-ui-v1` directory can be advanced with a future
+app release to refresh that pinned version.
+
+Offline conversations use the same ChatKit view and cached protocol responses.
+Threads are marked locked, so their composers cannot send. Disconnect/reconnect
+recreates ChatKit within the same chat panel to bypass its internal response cache. Only visited history pages
+are cached: an unseen conversation, an uncached pagination request or an
+incomplete UI cache displays an unavailable message inside the chat panel. There
+is no alternate history renderer and no queued message sending. Unsent text in
+ChatKit's composer is not exported to native persistent storage and can be lost
+on a connection transition. Completed turns are refreshed directly through the
+native bridge so ChatKit's internal cache cannot leave the saved history stale.
+
+The first online launch after this update migrates previously downloaded PDFs
+identified by Recent into the server-specific document directory. Explicit
+sign-out removes that server's offline workspace. PDF/response storage currently
+has no automatic quota or eviction; preserving downloaded papers takes priority.
+UI assets are shared across server namespaces and contain no conversation data.
 
 ## Architecture
 
-- `ChatKit.html` loads the official ChatKit Web Component. It is bundled in the
-  app and loaded with a localhost development base URL.
+- `ChatKit.html` is bundled in the app. `ChatKitAssetServer.swift` downloads and
+  serves the official Web Component and its dependencies from the local asset cache.
 - `ChatKitView.swift` embeds it in `WKWebView`. A main-frame-only message handler
   forwards fixed `/api/chatkit` requests through `APIClient`. Access and refresh
   tokens stay in native code; the page cannot request arbitrary authenticated URLs.
@@ -78,33 +97,46 @@ not enabled. History uses stable cursor pagination.
   acquire a saved selection on their next send; unsent picker changes are not saved.
 - The bundled page uses the SDK's development `local-dev` domain key. A separate
   production web deployment needs its own registered origin/domain configuration.
-  UI assets are fetched from OpenAI's CDN; this is not an offline UI bundle.
+  Public UI assets are downloaded from OpenAI's CDN once and served locally thereafter.
 
 ## Verification
 
-```sh
-.venv/bin/ruff check server
-.venv/bin/pytest -q
-xcodebuild -project client/PaperChat.xcodeproj -scheme PaperChat \
-  -sdk macosx -derivedDataPath /tmp/paperchat-chatkit-macos build
-xcodebuild -project client/PaperChat.xcodeproj -scheme PaperChat \
-  -sdk iphonesimulator -derivedDataPath /tmp/paperchat-chatkit-ios \
-  CODE_SIGNING_ALLOWED=NO build
-```
+The client checks use synthetic PDFs and conversations. `OfflineReadingCheck`
+checks cold restoration, saved PDF opening without network metadata, local PDF
+and library searches, missing-file handling, position persistence and reconnect
+synchronization, edits during in-flight saves, server isolation and stale writes.
+`ChatKitOfflineCheck` uses the production HTML, asset server and response cache.
+It warms the public UI cache, tests disconnect/reconnect in the same view, then
+creates a new nonpersistent WKWebView and cache actor with networking disabled.
+It checks message text, inline/block math, native page links, isolated origins,
+a locked composer and zero offline API requests.
 
-The API tests cover shared history, a second device opening a thread, cursor
-pagination, page/selection context, model/effort forwarding, Codex thread-ID reuse,
-authentication, scope isolation, duplicate/concurrent sends, unsupported actions,
-failed generation and early stream cancellation.
-
-After `./scripts/deploy-home.sh`, run the synthetic integration check in the API
-container, using the configured Docker context/host:
+Run from the repository root on macOS:
 
 ```sh
-docker --context ubuntu exec -i paperchat-paperchat-api-1 \
-  python - < scripts/chatkit-smoke-test.py
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+swift_options=(-sdk "$(xcrun --sdk macosx --show-sdk-path)" -target "$(uname -m)-apple-macos15.0" \
+  -swift-version 6 -module-cache-path /tmp/paperchat-swift-cache)
+sources=(client/PaperChat/{Models,APIClient,KeychainStore,OfflineStore,PDFCache,MinerUCache,AppModel}.swift)
+xcrun swiftc -parse-as-library "${swift_options[@]}" \
+  "${sources[@]}" client/Tests/OfflineReadingCheck.swift -o /tmp/paperchat-offline-reading-check
+/tmp/paperchat-offline-reading-check
+
+xcrun swiftc -parse-as-library "${swift_options[@]}" \
+  "${sources[@]}" client/PaperChat/ChatKitAssetServer.swift \
+  client/Tests/ChatKitOfflineCheck.swift -o /tmp/paperchat-chatkit-offline-check
+/tmp/paperchat-chatkit-offline-check /tmp/paperchat-chatkit-check-assets
+
+xcodebuild -project client/PaperChat.xcodeproj -scheme PaperChat \
+  -sdk macosx -derivedDataPath /tmp/paperchat-offline-macos CODE_SIGNING_ALLOWED=NO build
+xcodebuild -project client/PaperChat.xcodeproj -scheme PaperChat \
+  -sdk iphonesimulator -derivedDataPath /tmp/paperchat-offline-ios CODE_SIGNING_ALLOWED=NO build
 ```
 
-This uses temporary SQLite storage and synthetic paper text with the configured
-real Codex runner. It verifies two turns, refresh-token rotation, saved history
-and Codex conversation reuse without reading or sending real paper contents.
+The ChatKit check's initial UI download needs access to the public CDN; no real
+API credentials, user papers or LLM calls are used. It saves online/offline
+screenshots in the system temporary directory.
+
+For server changes, run the API tests and deployment checks described in
+`AGENTS.md`. `scripts/chatkit-smoke-test.py` remains the deployed synthetic
+integration check for actual Codex answers and shared server history.

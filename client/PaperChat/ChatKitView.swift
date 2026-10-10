@@ -18,7 +18,8 @@ struct ChatKitConversation: View {
         context["model"] = selectedModel?.model
         context["effort"] = selectedEffort
         let value: [String: Any] = [
-            "threadID": session.selectedThread?.id as Any? ?? NSNull(),
+            "threadID": (session.selectedThread?.id ?? (session as? PaperSession)?.paper.readingState?.activeThreadID) as Any? ?? NSNull(),
+            "offline": model.isOffline,
             "context": context,
             "colorScheme": colorScheme == .dark ? "dark" : "light",
             "domainKey": domainKey,
@@ -47,15 +48,22 @@ struct ChatKitConversation: View {
                     .lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12).padding(.bottom, 7)
             }
-            if let error {
-                Text(error).font(.caption).foregroundStyle(.red)
-                    .textSelection(.enabled).padding(10)
+            if model.isOffline {
+                Text("Offline · Saved chat history only. Sending is unavailable.")
+                    .font(.caption).foregroundStyle(.secondary).padding(10)
             }
-            ChatKitWebView(
-                configuration: configuration, model: model, session: session,
-                onError: { error = $0 }
-            )
+            if let error, model.isOffline {
+                ContentUnavailableView("Chat unavailable offline", systemImage: "wifi.slash", description: Text(error))
+            } else {
+                if let error { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled).padding(10) }
+                ChatKitWebView(
+                    configuration: configuration, model: model, session: session,
+                    onError: { message in DispatchQueue.main.async { error = message } }
+                )
+            }
         }
+        .onChange(of: model.isOffline) { _, offline in if !offline { error = nil } }
+        .onChange(of: session.selectedThread?.id) { _, _ in error = nil }
     }
 }
 
@@ -68,6 +76,8 @@ private final class ChatKitCoordinator: NSObject, WKScriptMessageHandler, WKNavi
     weak var webView: WKWebView?
     var loaded = false
     var tasks: [String: Task<Void, Never>] = [:]
+    var assetServer: ChatKitAssetServer?
+    var loadTask: Task<Void, Never>?
 
     init(configuration: String, model: AppModel, session: ChatSession, onError: @escaping (String) -> Void) {
         self.configuration = configuration
@@ -86,8 +96,7 @@ private final class ChatKitCoordinator: NSObject, WKScriptMessageHandler, WKNavi
         // Expanded workflow contents exhibit the same WebKit transition issue.
         // Scope the workaround to the ChatKit frame, thread and expanded workflows.
         options.userContentController.addUserScript(WKUserScript(source: """
-            if (location.origin === 'https://cdn.platform.openai.com' &&
-                location.pathname.startsWith('/deployments/chatkit/')) {
+            if (location.pathname.startsWith('/deployments/chatkit/')) {
                 const style = document.createElement('style');
                 style.textContent = '#chatkit-thread-container { opacity: 1 !important; } [data-workflow-expanded=true] * { opacity: 1 !important; }';
                 document.documentElement.appendChild(style);
@@ -99,9 +108,19 @@ private final class ChatKitCoordinator: NSObject, WKScriptMessageHandler, WKNavi
         webView = view
         if let url = Bundle.main.url(forResource: "ChatKit", withExtension: "html"),
            let html = try? String(contentsOf: url, encoding: .utf8) {
-            // Bundled prototype page, with native networking; localhost is ChatKit's
-            // development origin. Production domain verification can be configured separately.
-            view.loadHTMLString(html, baseURL: URL(string: "http://localhost/"))
+            let server = ChatKitAssetServer(html: html, onFailure: { [weak self] message in
+                Task { @MainActor in self?.onError(message) }
+            })
+            assetServer = server
+            loadTask = Task { [weak self, weak view] in
+                guard let self else { return }
+                do {
+                    await server.setOffline(model.isOffline)
+                    let url = try await server.start()
+                    guard !Task.isCancelled else { return }
+                    view?.load(URLRequest(url: url))
+                } catch { if !Task.isCancelled { onError(error.localizedDescription) } }
+            }
         } else { onError("The bundled ChatKit page is missing.") }
         return view
     }
@@ -109,6 +128,7 @@ private final class ChatKitCoordinator: NSObject, WKScriptMessageHandler, WKNavi
     func update(_ configuration: String) {
         guard self.configuration != configuration else { return }
         self.configuration = configuration
+        Task { await assetServer?.setOffline(model.isOffline) }
         configure()
     }
 
@@ -179,6 +199,8 @@ private final class ChatKitCoordinator: NSObject, WKScriptMessageHandler, WKNavi
     }
 
     func stop() {
+        loadTask?.cancel()
+        if let assetServer { Task { await assetServer.stop() } }
         tasks.values.forEach { $0.cancel() }
         tasks.removeAll()
         session.isSending = false
@@ -201,7 +223,7 @@ private final class ChatKitCoordinator: NSObject, WKScriptMessageHandler, WKNavi
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
-                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+                 decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
         if let url = navigationAction.request.url,
            navigationAction.navigationType == .linkActivated || url.host == "paperchat.invalid" {
             openLink(url)

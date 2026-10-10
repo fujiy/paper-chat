@@ -1,5 +1,6 @@
 import Foundation
 import PDFKit
+import Network
 import SwiftUI
 #if !os(macOS)
 import UIKit
@@ -8,6 +9,7 @@ import UIKit
 @MainActor
 final class AppModel: ObservableObject {
     @Published var isAuthenticated = false
+    @Published var isOffline = false
     @Published var isBusy = false
     @Published var isSearching = false
     @Published var isLoadingMoreSearchResults = false
@@ -34,7 +36,35 @@ final class AppModel: ObservableObject {
     @Published var serverURLString = UserDefaults.standard.string(forKey: "serverURL")
         ?? "http://localhost:8001/"
 
-    private var client = APIClient(baseURL: URL(string: "http://localhost:8001/")!)
+    private var client: APIClient
+    private var offlineStore: OfflineStore?
+    private var workspace = OfflineWorkspace()
+    private var workspaceGeneration = UUID()
+    private var paperCacheRoot: URL? { offlineStore?.root.appending(path: "papers", directoryHint: .isDirectory) }
+    private var persistenceTask: Task<Void, Never>?
+    private var sessionRestoreTask: Task<Void, Never>?
+    private var paperRefreshTasks: [String: Task<Void, Never>] = [:]
+    private var isRefreshingLibrary = false
+    private var isSyncingReadingStates = false
+    private let networkMonitor = NWPathMonitor()
+
+    init(client: APIClient? = nil, offlineStore: OfflineStore? = nil, monitorNetwork: Bool = true) {
+        self.client = client ?? APIClient(baseURL: URL(string: "http://localhost:8001/")!)
+        self.offlineStore = offlineStore
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            let connected = path.status == .satisfied
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if !connected { self.isOffline = true }
+                else if self.isOffline, self.isAuthenticated {
+                    await self.refreshLibrary()
+                }
+            }
+        }
+        if monitorNetwork { networkMonitor.start(queue: DispatchQueue(label: "PaperChat.connectivity")) }
+    }
+
+    deinit { networkMonitor.cancel() }
     private var saveTasks: [String: Task<Void, Never>] = [:]
     private var pageViewTasks: [String: Task<Void, Never>] = [:]
     private var pageViewTrackers: [String: PageViewTracker] = [:]
@@ -65,15 +95,31 @@ final class AppModel: ObservableObject {
     }
 
     func restoreSession() async {
-        guard
-            let baseURL = normalizedServerURL(),
-            let tokenData = try? KeychainStore.load(account: "tokens"),
-            let tokens = try? JSONDecoder.paperChat.decode(AuthTokens.self, from: tokenData)
-        else { return }
+        if let sessionRestoreTask { await sessionRestoreTask.value; return }
+        let task = Task { await restoreSessionOnce() }
+        sessionRestoreTask = task
+        await task.value
+        sessionRestoreTask = nil
+    }
+
+    private func restoreSessionOnce() async {
+        let generation = workspaceGeneration
+        guard let baseURL = normalizedServerURL() else { return }
+        if offlineStore == nil { offlineStore = OfflineStore(serverURL: baseURL) }
+        let tokenData = try? KeychainStore.load(account: "tokens")
+        let tokens = tokenData.flatMap { try? JSONDecoder.paperChat.decode(AuthTokens.self, from: $0) }
         await client.configure(baseURL: baseURL, tokens: tokens)
+        await restoreLocalWorkspace()
+        guard !Task.isCancelled, generation == workspaceGeneration else { return }
+        guard tokens != nil else {
+            // Explicit sign-out removes the workspace. An expired online session
+            // must not make already downloaded papers unreadable.
+            isAuthenticated = !workspace.papers.isEmpty
+            isOffline = isAuthenticated
+            return
+        }
         isAuthenticated = true
-        await refreshLibrary()
-        await loadModels()
+        Task { await refreshLibrary(); await loadModels() }
     }
 
     func signIn(bootstrapToken: String) async {
@@ -87,7 +133,12 @@ final class AppModel: ObservableObject {
             )
             try KeychainStore.save(JSONEncoder.paperChat.encode(tokens), account: "tokens")
             UserDefaults.standard.set(serverURLString, forKey: "serverURL")
+            workspaceGeneration = UUID()
+            offlineStore = OfflineStore(serverURL: url)
+            workspace = OfflineWorkspace()
+            await restoreLocalWorkspace()
             isAuthenticated = true
+            isOffline = false
         }
         if isAuthenticated {
             await refreshLibrary()
@@ -96,14 +147,22 @@ final class AppModel: ObservableObject {
     }
 
     func signOut() async {
-        try? await client.revokeCurrentSession()
-        KeychainStore.delete(account: "tokens")
+        let store = offlineStore
+        let revoke = !isOffline
+        workspaceGeneration = UUID()
+        sessionRestoreTask?.cancel()
+        offlineStore = nil
+        isAuthenticated = false
+        isRefreshingLibrary = false
+        isSyncingReadingStates = false
+        paperRefreshTasks.values.forEach { $0.cancel() }
+        paperRefreshTasks = [:]
         saveTasks.values.forEach { $0.cancel() }
         saveTasks = [:]
         pageViewTasks.values.forEach { $0.cancel() }
         pageViewTasks = [:]
         pageViewTrackers = [:]
-        isAuthenticated = false
+        workspace = OfflineWorkspace()
         recentPapers = []
         starredPapers = []
         libraryPapers = []
@@ -118,32 +177,139 @@ final class AppModel: ObservableObject {
         managementSessions = []
         navigationHistory = []
         route = .start
+        await persistenceTask?.value
+        try? await store?.clear()
+        if revoke { try? await client.revokeCurrentSession() }
+        KeychainStore.delete(account: "tokens")
+    }
+
+    func restoreLocalWorkspace() async {
+        let generation = workspaceGeneration
+        guard let offlineStore else { return }
+        do {
+            guard let saved = try await offlineStore.loadWorkspace(), generation == workspaceGeneration else { return }
+            workspace = saved
+            recentPapers = saved.recent
+            starredPapers = saved.starred
+            libraryPapers = saved.library
+            chatOverviews = saved.chats
+            for id in saved.openPaperIDs {
+                guard !openSessions.contains(where: { $0.id == id }) else { continue }
+                guard let paper = saved.papers[id],
+                      let pdf = await PDFCache.shared.cachedURL(paperID: id, root: paperCacheRoot) else { continue }
+                let session = PaperSession(paper: paper)
+                session.pdfURL = pdf
+                await restorePaperExtras(session)
+                openSessions.append(session)
+            }
+            if let id = saved.activePaperID, openSessions.contains(where: { $0.id == id }) {
+                route = .paper(id)
+            }
+        } catch { errorMessage = "Could not restore the saved library: \(error.localizedDescription)" }
+    }
+
+    private func persistWorkspace(immediately: Bool = false) {
+        guard let offlineStore else { return }
+        workspace.revision += 1
+        workspace.recent = recentPapers
+        workspace.starred = starredPapers
+        workspace.library = libraryPapers
+        workspace.chats = chatOverviews
+        workspace.openPaperIDs = openSessions.map(\.id)
+        if case let .paper(id) = route { workspace.activePaperID = id }
+        else { workspace.activePaperID = nil }
+        let snapshot = workspace
+        let previous = persistenceTask
+        previous?.cancel()
+        persistenceTask = Task {
+            await previous?.value
+            do {
+                if !immediately { try await Task.sleep(for: .milliseconds(100)) }
+                guard !Task.isCancelled else { return }
+                try await offlineStore.saveWorkspace(snapshot)
+            } catch is CancellationError {
+                return
+            } catch { errorMessage = "Could not save the offline library: \(error.localizedDescription)" }
+        }
+    }
+
+    func flushLocalWorkspace() async {
+        while let task = persistenceTask {
+            let revision = workspace.revision
+            await task.value
+            if workspace.revision == revision { return }
+        }
     }
 
     func refreshLibrary() async {
-        await perform {
-            async let recent = client.recentPapers()
-            async let starred = client.starredPapers()
-            async let papers = client.libraryPapers()
-            async let chats = client.chats()
-            recentPapers = try await recent
-            starredPapers = try await starred
-            libraryPapers = try await papers
-            chatOverviews = try await chats
+        guard !isRefreshingLibrary else { return }
+        let generation = workspaceGeneration
+        isRefreshingLibrary = true
+        defer {
+            if generation == workspaceGeneration { isRefreshingLibrary = false; persistWorkspace() }
         }
+        do {
+            let recent = try await client.recentPapers()
+            guard generation == workspaceGeneration else { return }
+            isOffline = false
+            let pending = recentPapers.filter { workspace.pendingReadingStates[$0.id] != nil }
+            recentPapers = pending + recent.filter { paper in !pending.contains(where: { $0.id == paper.id }) }
+            persistWorkspace()
+            for paper in recent where workspace.papers[paper.id] == nil {
+                guard let legacy = await PDFCache.shared.cachedURL(paperID: paper.id) else { continue }
+                guard generation == workspaceGeneration else { return }
+                if let _ = try? await PDFCache.shared.storeLocalFile(
+                    at: legacy, paperID: paper.id, root: paperCacheRoot
+                ) { workspace.papers[paper.id] = paper }
+            }
+            await syncPendingReadingStates()
+        } catch { if generation == workspaceGeneration { reportBackground(error) } }
+        guard generation == workspaceGeneration, !isOffline else { return }
+        // Endpoints update independently; failure preserves each saved list.
+        do {
+            let value = try await client.starredPapers()
+            guard generation == workspaceGeneration else { return }
+            starredPapers = value; persistWorkspace()
+        } catch { if generation == workspaceGeneration { reportBackground(error) } }
+        do {
+            let value = try await client.libraryPapers()
+            guard generation == workspaceGeneration else { return }
+            libraryPapers = value; persistWorkspace()
+        } catch { if generation == workspaceGeneration { reportBackground(error) } }
+        do {
+            let value = try await client.chats()
+            guard generation == workspaceGeneration else { return }
+            chatOverviews = value; persistWorkspace()
+        } catch { if generation == workspaceGeneration { reportBackground(error) } }
+        if generation == workspaceGeneration, !isOffline {
+            for session in openSessions { refreshPaperInBackground(session) }
+        }
+    }
+
+    private func reportBackground(_ error: Error) {
+        guard !Self.isCancellation(error) else { return }
+        if isConnectivityFailure(error) { isOffline = true }
+        // Cached reading remains available; foreground actions report errors.
+    }
+
+    private func isConnectivityFailure(_ error: Error) -> Bool {
+        if let error = error as? URLError { return error.code != .cancelled }
+        if case APIError.server(let status, _) = error { return [401, 502, 503, 504].contains(status) }
+        if case APIError.unauthorized = error { return true }
+        return false
     }
 
     func loadModels() async {
         do {
             models = try await client.models()
+            try? await offlineStore?.save(models, key: "models")
             let chosen = models.first(where: { $0.id == selectedModelID })
                 ?? models.first(where: \.isDefault)
                 ?? models.first
             selectModel(chosen?.id)
         } catch {
-            models = []
-            selectedModelID = nil
-            selectedEffortID = nil
+            if let saved: [ModelOption] = try? await offlineStore?.load("models") { models = saved }
+            selectModel(models.first(where: \.isDefault)?.id ?? models.first?.id)
         }
     }
 
@@ -161,6 +327,7 @@ final class AppModel: ObservableObject {
     }
 
     func navigate(to destination: WorkspaceRoute, fromSidebar: Bool = false) {
+        defer { persistWorkspace() }
         if destination != route, let session = activeSession {
             stopPageViewTracking(session)
         }
@@ -189,6 +356,7 @@ final class AppModel: ObservableObject {
     }
 
     func goBack() {
+        defer { persistWorkspace() }
         guard let destination = navigationHistory.popLast() else { return }
         if let session = activeSession {
             stopPageViewTracking(session)
@@ -232,6 +400,19 @@ final class AppModel: ObservableObject {
             if searchGeneration == generation {
                 isSearching = false
             }
+        }
+        if isOffline {
+            searchPapers = libraryPapers.filter {
+                $0.title.localizedCaseInsensitiveContains(trimmed)
+                    || $0.creators.contains { $0.displayName.localizedCaseInsensitiveContains(trimmed) }
+            }.map {
+                LibrarySearchPaper(itemKey: $0.itemKey, attachmentKey: $0.attachmentKey,
+                    title: $0.title, creators: $0.creators, year: $0.year, evidence: [],
+                    matchCount: 0, hasMoreEvidence: false)
+            }
+            searchPaperCount = searchPapers.count
+            searchResultTotal = nil
+            return
         }
         do {
             let response = try await client.search(
@@ -300,7 +481,7 @@ final class AppModel: ObservableObject {
     func open(searchResult: LibrarySearchResult) async {
         guard let key = searchResult.usableAttachmentKey else { return }
         await perform {
-            let paper = try await client.resolve(attachmentKey: key)
+            let paper = try await resolvePaper(attachmentKey: key)
             let session = try await openPaper(paper, fromSidebar: false)
             if let matchedPage = searchResult.matchedPage ?? searchResult.pageStart {
                 let pageIndex = max(0, matchedPage - 1)
@@ -322,14 +503,14 @@ final class AppModel: ObservableObject {
             return
         }
         await perform {
-            let paper = try await client.resolve(attachmentKey: key)
+            let paper = try await resolvePaper(attachmentKey: key)
             _ = try await openPaper(paper, fromSidebar: false)
         }
     }
 
     func open(libraryPaper: LibraryPaper) async {
         await perform {
-            let paper = try await client.resolve(attachmentKey: libraryPaper.attachmentKey)
+            let paper = try await resolvePaper(attachmentKey: libraryPaper.attachmentKey)
             _ = try await openPaper(paper, fromSidebar: false)
         }
     }
@@ -361,14 +542,14 @@ final class AppModel: ObservableObject {
         await perform {
             let paper: Paper
             do {
-                paper = try await client.resolve(attachmentKey: attachmentKey)
+                paper = try await resolvePaper(attachmentKey: attachmentKey)
             } catch let error as APIError where error.isZoteroAttachmentNotFound {
                 paper = try await client.resolveLocal(
                     attachmentKey: attachmentKey,
                     filename: url.lastPathComponent
                 )
             }
-            _ = try await PDFCache.shared.storeLocalFile(at: url, paperID: paper.id)
+            _ = try await PDFCache.shared.storeLocalFile(at: url, paperID: paper.id, root: paperCacheRoot)
             _ = try await openPaper(paper, fromSidebar: false)
         }
     }
@@ -385,16 +566,25 @@ final class AppModel: ObservableObject {
                     session = existing
                 } else {
                     session = ChatSession()
-                    session.selectedThread = try await client.thread(id: chat.id)
+                    if isOffline {
+                        guard let thread: ChatThread = try await offlineStore?.load("thread/" + chat.id) else {
+                            throw OfflineError.chatNotCached
+                        }
+                        session.selectedThread = thread
+                    } else {
+                        session.selectedThread = try await client.thread(id: chat.id)
+                        try? await offlineStore?.save(session.selectedThread, key: "thread/" + chat.id)
+                    }
                     session.isChatPresented = true
                     session.chatRoute = .conversation
-                    session.messages = try await client.messages(threadID: chat.id)
                     managementSessions.append(session)
                 }
                 navigate(to: .management(session.id))
                 return
             }
-            let paper = try await client.paper(id: paperID)
+            let paper: Paper
+            if let saved = workspace.papers[paperID] { paper = saved }
+            else { paper = try await client.paper(id: paperID) }
             let session = try await openPaper(paper, fromSidebar: false)
             if let thread = session.threads.first(where: { $0.id == chat.id }) {
                 try await selectThread(thread, in: session)
@@ -417,34 +607,98 @@ final class AppModel: ObservableObject {
             return existing
         }
 
-        let detail = try await client.paper(id: paper.id)
-        let session = PaperSession(paper: detail)
-        session.threads = try await client.threads(paperID: detail.id)
-        if let overview = try? await client.bookmarks(paperID: detail.id) {
-            session.bookmarks = overview.bookmarks
-            session.bookmarkSuggestions = overview.suggestions
-        }
-        if let activeID = detail.readingState?.activeThreadID,
-           let active = session.threads.first(where: { $0.id == activeID }) {
-            try await selectThread(active, in: session)
-        }
-        if let cached = await PDFCache.shared.cachedURL(paperID: detail.id) {
+        let cachedPaper = workspace.papers[paper.id] ?? paper
+        let session = PaperSession(paper: cachedPaper)
+        if let cached = await PDFCache.shared.cachedURL(paperID: paper.id, root: paperCacheRoot) {
             session.pdfURL = cached
+            await restorePaperExtras(session)
+            openSessions.append(session)
+            if !fromSidebar { promoteInRecent(cachedPaper) }
+            navigate(to: .paper(session.id), fromSidebar: fromSidebar)
+            refreshPaperInBackground(session)
+            return session
+        }
+        guard !isOffline else { throw OfflineError.pdfNotDownloaded }
+        let detail = try await client.paper(id: paper.id)
+        session.paper = detail
+        session.pageIndex = detail.readingState?.pageIndex ?? 0
+        session.scrollOffset = detail.readingState?.scrollOffset ?? 0
+        session.zoomScale = detail.readingState?.zoomScale ?? 0
+        if let legacy = await PDFCache.shared.cachedURL(paperID: detail.id) {
+            session.pdfURL = try await PDFCache.shared.storeLocalFile(
+                at: legacy, paperID: detail.id, root: paperCacheRoot
+            )
         } else {
             let (data, etag) = try await client.downloadPDF(paperID: detail.id)
-            session.pdfURL = try await PDFCache.shared.store(data, paperID: detail.id, etag: etag)
+            session.pdfURL = try await PDFCache.shared.store(data, paperID: detail.id, etag: etag, root: paperCacheRoot)
         }
-        if !fromSidebar {
-            promoteInRecent(detail)
-        }
+        workspace.papers[detail.id] = detail
         openSessions.append(session)
-        refreshAgentTextAvailability(in: session)
-        Task { await loadStructure(in: session) }
+        if !fromSidebar { promoteInRecent(detail) }
         navigate(to: .paper(session.id), fromSidebar: fromSidebar)
+        refreshPaperInBackground(session)
         return session
     }
 
+    private func resolvePaper(attachmentKey: String) async throws -> Paper {
+        if let paper = workspace.papers.values.first(where: {
+            $0.identifiers?.contains(where: { $0.kind == "zotero" && $0.value == attachmentKey }) == true
+        }) { return paper }
+        guard !isOffline else { throw OfflineError.pdfNotDownloaded }
+        return try await client.resolve(attachmentKey: attachmentKey)
+    }
+
+    private func restorePaperExtras(_ session: PaperSession) async {
+        if let threads: [ChatThread] = try? await offlineStore?.load("threads/" + session.id) {
+            session.threads = threads
+            session.selectedThread = threads.first { $0.id == session.paper.readingState?.activeThreadID }
+        }
+        if let overview: BookmarkOverview = try? await offlineStore?.load("bookmarks/" + session.id) {
+            session.bookmarks = overview.bookmarks
+            session.bookmarkSuggestions = overview.suggestions
+        }
+        session.documentStructure = try? await offlineStore?.load("structure/" + session.id)
+        await loadCachedMinerU(in: session)
+    }
+
+    private func refreshPaperInBackground(_ session: PaperSession) {
+        guard !isOffline, paperRefreshTasks[session.id] == nil else { return }
+        let generation = workspaceGeneration
+        paperRefreshTasks[session.id] = Task { [weak self, weak session] in
+            guard let self, let session else { return }
+            defer { if generation == workspaceGeneration { paperRefreshTasks[session.id] = nil } }
+            do {
+                var detail = try await client.paper(id: session.id)
+                guard !Task.isCancelled, generation == workspaceGeneration else { return }
+                // Never move a viewport that the user is already reading.
+                detail.readingState = workspace.papers[session.id]?.readingState ?? session.paper.readingState
+                session.paper = detail
+                workspace.papers[session.id] = detail
+                let threads = try await client.threads(paperID: session.id)
+                guard !Task.isCancelled, generation == workspaceGeneration else { return }
+                session.threads = threads
+                if session.selectedThread == nil {
+                    session.selectedThread = threads.first { $0.id == detail.readingState?.activeThreadID }
+                }
+                try? await offlineStore?.save(threads, key: "threads/" + session.id)
+                await loadBookmarks(in: session)
+                await loadStructure(in: session)
+                refreshAgentTextAvailability(in: session)
+                persistWorkspace()
+            } catch { if generation == workspaceGeneration { reportBackground(error) } }
+        }
+    }
+
+    private func loadCachedMinerU(in session: PaperSession) async {
+        guard let pdfURL = session.pdfURL,
+              let key = session.paper.identifiers?.first(where: { $0.kind == "zotero" })?.value else { return }
+        session.mineruDocument = try? await MinerUCache.shared.load(
+            paperID: session.id, attachmentKey: key, pdfURL: pdfURL, root: paperCacheRoot
+        )
+    }
+
     private func refreshAgentTextAvailability(in session: PaperSession) {
+        guard !isOffline else { return }
         session.agentTextAvailability = .checking
         Task { [weak self, weak session] in
             guard let self, let session else { return }
@@ -456,9 +710,12 @@ final class AppModel: ObservableObject {
     private func promoteInRecent(_ paper: Paper) {
         recentPapers.removeAll(where: { $0.id == paper.id })
         recentPapers.insert(paper, at: 0)
+        workspace.papers[paper.id] = paper
+        persistWorkspace()
     }
 
     func toggleStar(in session: PaperSession) async {
+        guard !isOffline else { errorMessage = "Connect to the server to change stars or bookmarks."; return }
         let next = !session.paper.isStarred
         do {
             let saved = try await client.setStar(paperID: session.id, starred: next)
@@ -474,6 +731,8 @@ final class AppModel: ObservableObject {
             } else {
                 starredPapers.removeAll(where: { $0.id == session.id })
             }
+            workspace.papers[session.id] = session.paper
+            persistWorkspace()
         } catch {
             report(error)
         }
@@ -481,7 +740,9 @@ final class AppModel: ObservableObject {
 
     func presentChat(in session: PaperSession) {
         session.sidebarMode = .chat
-        if session.threads.isEmpty {
+        if session.selectedThread == nil, session.paper.readingState?.activeThreadID != nil {
+            session.chatRoute = .conversation
+        } else if session.threads.isEmpty {
             beginNewChat(in: session)
         } else if session.selectedThread == nil {
             session.chatRoute = .list
@@ -508,27 +769,38 @@ final class AppModel: ObservableObject {
     }
 
     func loadStructure(in session: PaperSession) async {
+        let generation = workspaceGeneration
         guard !isSimulatorBookmarkReproMode else { return }
         guard !session.isStructureLoading else { return }
+        if session.documentStructure == nil {
+            session.documentStructure = try? await offlineStore?.load("structure/" + session.id)
+        }
+        await loadCachedMinerU(in: session)
+        guard !isOffline else { return }
         session.isStructureLoading = true
         defer { session.isStructureLoading = false }
         do {
-            session.documentStructure = try await client.structure(paperID: session.id)
+            let structure = try await client.structure(paperID: session.id)
+            guard generation == workspaceGeneration, !Task.isCancelled else { return }
+            session.documentStructure = structure
+            try? await offlineStore?.save(structure, key: "structure/" + session.id)
         } catch {
             guard !Self.isCancellation(error) else { return }
-            report(error)
+            reportBackground(error)
         }
-        guard let pdfURL = session.pdfURL,
+        guard generation == workspaceGeneration, !isOffline,
+              let pdfURL = session.pdfURL,
               let attachmentKey = session.paper.identifiers?.first(where: { $0.kind == "zotero" })?.value
         else { return }
         do {
-            let cachedETag = await MinerUCache.shared.cachedETag(paperID: session.id)
+            let cachedETag = await MinerUCache.shared.cachedETag(paperID: session.id, root: paperCacheRoot)
             let (data, etag) = try await client.downloadMinerU(paperID: session.id, etag: cachedETag)
+            guard generation == workspaceGeneration, !Task.isCancelled else { return }
             if let data {
-                try await MinerUCache.shared.store(data, paperID: session.id, etag: etag)
+                try await MinerUCache.shared.store(data, paperID: session.id, etag: etag, root: paperCacheRoot)
             }
             session.mineruDocument = try await MinerUCache.shared.load(
-                paperID: session.id, attachmentKey: attachmentKey, pdfURL: pdfURL
+                paperID: session.id, attachmentKey: attachmentKey, pdfURL: pdfURL, root: paperCacheRoot
             )
         } catch APIError.server(404, _) {
             session.mineruDocument = nil
@@ -537,7 +809,7 @@ final class AppModel: ObservableObject {
             // Use a cached MinerU ZIP when Zotero or the network is unavailable.
             if session.mineruDocument == nil {
                 session.mineruDocument = try? await MinerUCache.shared.load(
-                    paperID: session.id, attachmentKey: attachmentKey, pdfURL: pdfURL
+                    paperID: session.id, attachmentKey: attachmentKey, pdfURL: pdfURL, root: paperCacheRoot
                 )
             }
         }
@@ -557,20 +829,24 @@ final class AppModel: ObservableObject {
     func openMatchedReference(_ reference: DocumentReference) async {
         guard let attachmentKey = reference.matchedAttachmentKey else { return }
         await perform {
-            let paper = try await client.resolve(attachmentKey: attachmentKey)
+            let paper = try await resolvePaper(attachmentKey: attachmentKey)
             _ = try await openPaper(paper, fromSidebar: false)
         }
     }
 
     func loadBookmarks(in session: PaperSession) async {
+        let generation = workspaceGeneration
+        guard !isOffline else { return }
         guard !isSimulatorBookmarkReproMode else { return }
         do {
             let overview = try await client.bookmarks(paperID: session.id)
+            guard generation == workspaceGeneration, !Task.isCancelled else { return }
+            try? await offlineStore?.save(overview, key: "bookmarks/" + session.id)
             session.bookmarks = overview.bookmarks
             session.bookmarkSuggestions = overview.suggestions
         } catch {
             guard !Self.isCancellation(error) else { return }
-            report(error)
+            reportBackground(error)
         }
     }
 
@@ -598,6 +874,7 @@ final class AppModel: ObservableObject {
             sortBookmarks(in: session)
             return
         }
+        guard !isOffline else { errorMessage = "Connect to the server to change bookmarks."; return }
         do {
             let targetPage = pageIndex ?? session.bookmarkPageIndex
             let bookmark = try await client.createBookmark(
@@ -612,12 +889,14 @@ final class AppModel: ObservableObject {
             session.bookmarks.append(bookmark)
             sortBookmarks(in: session)
             session.bookmarkSuggestions.removeAll(where: { $0.pageIndex == targetPage })
+            await cacheBookmarks(in: session)
         } catch {
             report(error)
         }
     }
 
     func addSelectionBookmark(in session: PaperSession) async {
+        guard !isOffline else { errorMessage = "Connect to the server to change stars or bookmarks."; return }
         guard !isSimulatorBookmarkReproMode else { return }
         guard let selection = session.selectionSnapshot, !selection.rects.isEmpty else { return }
         do {
@@ -634,16 +913,19 @@ final class AppModel: ObservableObject {
             )
             session.bookmarks.append(bookmark)
             sortBookmarks(in: session)
+            await cacheBookmarks(in: session)
         } catch {
             report(error)
         }
     }
 
     func deleteBookmark(_ bookmark: PaperBookmark, in session: PaperSession) async {
+        guard !isOffline else { errorMessage = "Connect to the server to change stars or bookmarks."; return }
         guard !isSimulatorBookmarkReproMode else { return }
         do {
             try await client.deleteBookmark(id: bookmark.id)
             session.bookmarks.removeAll(where: { $0.id == bookmark.id })
+            await cacheBookmarks(in: session)
             await loadBookmarks(in: session)
         } catch {
             report(error)
@@ -679,6 +961,13 @@ final class AppModel: ObservableObject {
         recordPageActivity(in: session, pageIndex: suggestion.pageIndex)
     }
 
+    private func cacheBookmarks(in session: PaperSession) async {
+        try? await offlineStore?.save(
+            BookmarkOverview(bookmarks: session.bookmarks, suggestions: session.bookmarkSuggestions),
+            key: "bookmarks/" + session.id
+        )
+    }
+
     private func sortBookmarks(in session: PaperSession) {
         session.bookmarks.sort {
             ($0.pageIndex, $0.createdAt) < ($1.pageIndex, $1.createdAt)
@@ -709,6 +998,10 @@ final class AppModel: ObservableObject {
             return
         }
         session.selectedThread = nil
+        if let paper = session as? PaperSession {
+            paper.paper.readingState?.activeThreadID = nil
+            scheduleReadingStateSave(paper)
+        }
         session.messages = []
         session.streamingMessage = nil
         session.chatRoute = .compose
@@ -723,11 +1016,18 @@ final class AppModel: ObservableObject {
         session.selectedThread = thread
         session.chatRoute = .conversation
         session.streamingMessage = nil
-        session.messages = try await client.messages(threadID: thread.id)
+        if let messages: [ChatMessage] = try? await offlineStore?.load("messages/" + thread.id) {
+            session.messages = messages
+        }
+        if !isOffline {
+            session.messages = try await client.messages(threadID: thread.id)
+            try? await offlineStore?.save(session.messages, key: "messages/" + thread.id)
+        }
         if let paper = session as? PaperSession { try await saveReadingState(paper) }
     }
 
     func refreshConversation(in session: ChatSession) async {
+        guard !isOffline else { return }
         guard let threadID = session.selectedThread?.id else { return }
         // The sending device owns its transient streaming bubble until its
         // POST stream finishes. Event invalidations still keep other devices
@@ -738,6 +1038,7 @@ final class AppModel: ObservableObject {
             guard session.selectedThread?.id == threadID else { return }
             guard session.streamingMessage == nil else { return }
             session.messages = messages
+            try? await offlineStore?.save(messages, key: "messages/" + threadID)
             if !messages.contains(where: { $0.status == "streaming" }) {
                 await refreshChatOverviews()
             }
@@ -748,6 +1049,7 @@ final class AppModel: ObservableObject {
     }
 
     func followConversation(in session: ChatSession) async {
+        guard !isOffline else { return }
         guard let threadID = session.selectedThread?.id else { return }
         var retryDelay = 1
         while !Task.isCancelled, session.selectedThread?.id == threadID {
@@ -770,6 +1072,7 @@ final class AppModel: ObservableObject {
         guard isAuthenticated else { return }
         await refreshLibrary()
         guard let session = activeSession else { return }
+        guard !isOffline else { startPageViewTracking(session); return }
         startPageViewTracking(session)
         do {
             let threads = try await client.threads(paperID: session.id)
@@ -790,32 +1093,128 @@ final class AppModel: ObservableObject {
     func appDidResignActive() {
         guard let session = activeSession else { return }
         stopPageViewTracking(session)
+        rememberReadingState(session)
+        persistWorkspace(immediately: true)
     }
 
     func chatKitRequest(body: String) async -> AsyncThrowingStream<ChatKitNetworkEvent, Error> {
-        await client.chatKitRequest(body: body)
+        let generation = workspaceGeneration
+        let key = ChatKitOfflineCache.key(body: body)
+        let store = offlineStore
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                func deliver(_ data: Data) {
+                    continuation.yield(.headers(200, "application/json"))
+                    continuation.yield(.chunk(String(decoding: data, as: UTF8.self)))
+                }
+                do {
+                    if isOffline {
+                        guard let key else { throw OfflineError.sendingRequiresConnection }
+                        guard let data: Data = try await store?.load(key) else { throw OfflineError.chatNotCached }
+                        deliver(ChatKitOfflineCache.readOnly(data))
+                    } else if let key {
+                        // Buffer read responses so a connection failure can fall
+                        // back cleanly without partially delivering two responses.
+                        var data = Data()
+                        var status = 200
+                        var contentType = "application/json"
+                        for try await event in await client.chatKitRequest(body: body) {
+                            switch event {
+                            case .headers(let code, let type): status = code; contentType = type
+                            case .chunk(let text): data.append(Data(text.utf8))
+                            }
+                        }
+                        try Task.checkCancellation()
+                        guard generation == workspaceGeneration else { throw CancellationError() }
+                        if status == 200, (try? JSONSerialization.jsonObject(with: data)) != nil {
+                            try? await store?.save(data, key: key)
+                            deliver(data)
+                        } else if [401, 502, 503, 504].contains(status),
+                                  let cached: Data = try await store?.load(key) {
+                            isOffline = true
+                            deliver(ChatKitOfflineCache.readOnly(cached))
+                        } else {
+                            continuation.yield(.headers(status, contentType))
+                            continuation.yield(.chunk(String(decoding: data, as: UTF8.self)))
+                        }
+                    } else {
+                        for try await event in await client.chatKitRequest(body: body) { continuation.yield(event) }
+                    }
+                    continuation.finish()
+                } catch {
+                    guard !Task.isCancelled else { continuation.finish(); return }
+                    reportBackground(error)
+                    if let key, isConnectivityFailure(error),
+                       let cached: Data = try? await store?.load(key) {
+                        deliver(ChatKitOfflineCache.readOnly(cached))
+                        continuation.finish()
+                    } else { continuation.finish(throwing: error) }
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     func chatKitSelectedThread(_ id: String, in session: ChatSession) async {
         do {
-            let thread = try await client.thread(id: id)
+            let thread: ChatThread
+            if isOffline {
+                let saved: ChatThread? = try? await offlineStore?.load("thread/" + id)
+                guard let cached = session.threads.first(where: { $0.id == id }) ?? saved else { throw OfflineError.chatNotCached }
+                thread = cached
+            } else {
+                thread = try await client.thread(id: id)
+                try? await offlineStore?.save(thread, key: "thread/" + id)
+            }
             guard thread.paperID == (session.isManagement ? nil : session.id) else { return }
             session.selectedThread = thread
             session.chatRoute = .conversation
             if !session.threads.contains(where: { $0.id == id }) { session.threads.insert(thread, at: 0) }
+            if !session.isManagement { try? await offlineStore?.save(session.threads, key: "threads/" + session.id) }
             if let paper = session as? PaperSession { try await saveReadingState(paper) }
         } catch { report(error) }
     }
 
+    private func cacheChatKitThread(_ id: String, in session: ChatSession) async {
+        // Read directly through the native bridge: ChatKit's own short-lived
+        // response cache can otherwise omit a just-completed turn from disk.
+        let generation = workspaceGeneration
+        var type = "threads.get_by_id"
+        var params: [String: Any] = ["thread_id": id]
+        while !isOffline, generation == workspaceGeneration, !Task.isCancelled {
+            var context: [String: Any] = [:]
+            if !session.isManagement { context["paper_id"] = session.id }
+            guard let body = try? JSONSerialization.data(withJSONObject: [
+                "type": type, "params": params, "metadata": ["paperchat": context]
+            ]) else { return }
+            do {
+                var data = Data()
+                for try await event in await chatKitRequest(body: String(decoding: body, as: UTF8.self)) {
+                    if case .chunk(let text) = event { data.append(Data(text.utf8)) }
+                }
+                guard let response = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+                let page = type == "threads.get_by_id" ? response["items"] as? [String: Any] : response
+                guard page?["has_more"] as? Bool == true,
+                      let items = page?["data"] as? [[String: Any]],
+                      let after = items.last?["id"] as? String, after != params["after"] as? String else { return }
+                type = "items.list"
+                params = ["thread_id": id, "limit": 9999, "order": "asc", "after": after]
+            } catch { reportBackground(error); return }
+        }
+    }
+
     func chatKitFinished(in session: ChatSession) async {
+        guard !isOffline else { return }
         session.isSending = false
         session.draft = ""
         if let id = session.selectedThread?.id {
             do {
                 let thread = try await client.thread(id: id)
+                try? await offlineStore?.save(thread, key: "thread/" + id)
                 if session.selectedThread?.id == id { session.selectedThread = thread }
             } catch { report(error) }
         }
+        if let id = session.selectedThread?.id { await cacheChatKitThread(id, in: session) }
         await refreshConversation(in: session)
         await refreshChatOverviews()
     }
@@ -911,6 +1310,7 @@ final class AppModel: ObservableObject {
     private func refreshChatOverviews() async {
         if let chats = try? await client.chats() {
             chatOverviews = chats
+            persistWorkspace()
         }
     }
 
@@ -1011,25 +1411,78 @@ final class AppModel: ObservableObject {
         scheduleReadingStateSave(session)
     }
 
+    @discardableResult
+    private func rememberReadingState(_ session: PaperSession) -> Bool {
+        let position = PendingReadingState(
+            pageIndex: session.pageIndex, scrollOffset: session.scrollOffset,
+            zoomScale: max(session.zoomScale, 0.01),
+            activeThreadID: session.selectedThread?.id ?? session.paper.readingState?.activeThreadID
+        )
+        if let previous = workspace.papers[session.id]?.readingState,
+           previous.pageIndex == position.pageIndex, previous.scrollOffset == position.scrollOffset,
+           previous.zoomScale == position.zoomScale, previous.activeThreadID == position.activeThreadID { return false }
+        workspace.pendingReadingStates[session.id] = position
+        var paper = session.paper
+        paper.readingState = ReadingState(
+            paperID: session.id, deviceID: persistentDeviceID(), pageIndex: position.pageIndex,
+            scrollOffset: position.scrollOffset, zoomScale: position.zoomScale,
+            displayMode: "singlePageContinuous", activeThreadID: position.activeThreadID,
+            updatedAt: ISO8601DateFormatter().string(from: .now)
+        )
+        session.paper = paper
+        workspace.papers[session.id] = paper
+        return true
+    }
+
     private func scheduleReadingStateSave(_ session: PaperSession) {
         guard !isSimulatorBookmarkReproMode else { return }
+        guard rememberReadingState(session) else { return }
+        // Persist before the network debounce, including when offline.
+        persistWorkspace()
         saveTasks[session.id]?.cancel()
-        saveTasks[session.id] = Task { [weak self, weak session] in
+        saveTasks[session.id] = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled, let self, let session else { return }
-            try? await self.saveReadingState(session)
+            guard !Task.isCancelled, let self, !isOffline else { return }
+            await syncPendingReadingStates()
         }
     }
 
     private func saveReadingState(_ session: PaperSession) async throws {
-        try await client.saveReadingState(
-            paperID: session.id,
-            pageIndex: session.pageIndex,
-            scrollOffset: session.scrollOffset,
-            zoomScale: max(session.zoomScale, 0.01),
-            displayMode: "singlePageContinuous",
-            activeThreadID: session.selectedThread?.id
-        )
+        rememberReadingState(session)
+        persistWorkspace()
+        if !isOffline { await syncPendingReadingStates() }
+    }
+
+    private func syncPendingReadingStates() async {
+        guard !isSyncingReadingStates, !isOffline else { return }
+        let generation = workspaceGeneration
+        isSyncingReadingStates = true
+        defer {
+            if generation == workspaceGeneration { isSyncingReadingStates = false; persistWorkspace() }
+        }
+        // Coalesce positions, but do not lose a newer position written while
+        // awaiting an earlier acknowledgement. Bound retries of rejected edits.
+        for _ in 0..<3 {
+            guard generation == workspaceGeneration, !isOffline,
+                  !workspace.pendingReadingStates.isEmpty else { break }
+            for (id, state) in workspace.pendingReadingStates {
+                do {
+                    try await client.saveReadingState(
+                        paperID: id, pageIndex: state.pageIndex, scrollOffset: state.scrollOffset,
+                        zoomScale: state.zoomScale, displayMode: "singlePageContinuous",
+                        activeThreadID: state.activeThreadID
+                    )
+                    guard generation == workspaceGeneration else { return }
+                    if workspace.pendingReadingStates[id]?.revision == state.revision {
+                        workspace.pendingReadingStates.removeValue(forKey: id)
+                    }
+                } catch {
+                    guard generation == workspaceGeneration else { return }
+                    reportBackground(error)
+                    if isOffline { return }
+                }
+            }
+        }
     }
 
     private func startPageViewTracking(_ session: PaperSession) {
@@ -1095,7 +1548,7 @@ final class AppModel: ObservableObject {
         tracker.newVisitPending = false
         pageViewTrackers[session.id] = tracker
         Task { [weak self, weak session] in
-            guard let self, let session else { return }
+            guard let self, let session, !isOffline else { return }
             try? await client.recordPageView(
                 paperID: session.id,
                 pageIndex: pageIndex,
@@ -1119,6 +1572,7 @@ final class AppModel: ObservableObject {
         if Self.isCancellation(error) {
             return
         }
+        if isConnectivityFailure(error) { isOffline = true }
         if let urlError = error as? URLError {
             switch urlError.code {
             case .timedOut:

@@ -8,15 +8,15 @@ actor PDFCache {
         return base.appending(path: "PaperChat/papers", directoryHint: .isDirectory)
     }()
 
-    func cachedURL(paperID: String) -> URL? {
-        let url = documentURL(paperID: paperID)
+    func cachedURL(paperID: String, root directory: URL? = nil) -> URL? {
+        let url = documentURL(paperID: paperID, root: directory)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
-    func store(_ data: Data, paperID: String, etag: String?) throws -> URL {
-        let directory = documentURL(paperID: paperID).deletingLastPathComponent()
+    func store(_ data: Data, paperID: String, etag: String?, root directory: URL? = nil) throws -> URL {
+        let url = documentURL(paperID: paperID, root: directory)
+        let directory = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let url = documentURL(paperID: paperID)
         try data.write(to: url, options: .atomic)
         if let etag {
             try Data(etag.utf8).write(
@@ -26,13 +26,13 @@ actor PDFCache {
         return url
     }
 
-    func storeLocalFile(at sourceURL: URL, paperID: String) throws -> URL {
+    func storeLocalFile(at sourceURL: URL, paperID: String, root directory: URL? = nil) throws -> URL {
         let data = try Data(contentsOf: sourceURL, options: .mappedIfSafe)
-        return try store(data, paperID: paperID, etag: nil)
+        return try store(data, paperID: paperID, etag: nil, root: directory)
     }
 
-    private func documentURL(paperID: String) -> URL {
-        root.appending(path: paperID, directoryHint: .isDirectory)
+    private func documentURL(paperID: String, root directory: URL?) -> URL {
+        (directory ?? root).appending(path: paperID, directoryHint: .isDirectory)
             .appending(path: "document.pdf")
     }
 }

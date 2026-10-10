@@ -14,16 +14,16 @@ actor MinerUCache {
     private let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appending(path: "PaperChat/papers", directoryHint: .isDirectory)
 
-    func cachedETag(paperID: String) -> String? {
-        let directory = root.appending(path: paperID, directoryHint: .isDirectory)
+    func cachedETag(paperID: String, root directory: URL? = nil) -> String? {
+        let directory = (directory ?? root).appending(path: paperID, directoryHint: .isDirectory)
         guard FileManager.default.fileExists(atPath: directory.appending(path: "mineru.zip").path) else {
             return nil
         }
         return try? String(contentsOf: directory.appending(path: "mineru-etag.txt"), encoding: .utf8)
     }
 
-    func store(_ data: Data, paperID: String, etag: String?) throws {
-        let directory = root.appending(path: paperID, directoryHint: .isDirectory)
+    func store(_ data: Data, paperID: String, etag: String?, root directory: URL? = nil) throws {
+        let directory = (directory ?? root).appending(path: paperID, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try data.write(to: directory.appending(path: "mineru.zip"), options: .atomic)
         let thumbnails = directory.appending(path: "mineru-thumbnails", directoryHint: .isDirectory)
@@ -33,8 +33,8 @@ actor MinerUCache {
         }
     }
 
-    func load(paperID: String, attachmentKey: String, pdfURL: URL) throws -> MinerUDocument? {
-        let directory = root.appending(path: paperID, directoryHint: .isDirectory)
+    func load(paperID: String, attachmentKey: String, pdfURL: URL, root directory: URL? = nil) throws -> MinerUDocument? {
+        let directory = (directory ?? root).appending(path: paperID, directoryHint: .isDirectory)
         let archive = directory.appending(path: "mineru.zip")
         guard FileManager.default.fileExists(atPath: archive.path) else { return nil }
         let zip = try MinerUZip(data: Data(contentsOf: archive, options: .mappedIfSafe))
