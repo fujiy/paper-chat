@@ -1,0 +1,61 @@
+client/PaperChat.xcodeproj/project.pbxproj
+  s_992e56c4337e4b::t_f418b0a133868f 28,51,80,193,240,267
+client/PaperChat/Info.plist
+  s_992e56c4337e4b::t_f418b0a133868f 22-27
+client/PaperChat/AppModel.swift
+  s_992e56c4337e4b::t_f418b0a133868f 45,147,152,521-555,869
+client/PaperChat/PaperChat.entitlements
+  s_992e56c4337e4b::t_f418b0a133868f 1-6
+client/PaperChat/RichTextView.swift
+  s_992e56c4337e4b::t_f418b0a133868f 7,92-95,99
+client/PaperChat/PaperLink.swift
+  s_992e56c4337e4b::t_f418b0a133868f 1-20,22-46
+  s_992e56c4337e4b::t_eb9fff4632e676 21
+client/PaperChat/PaperChatApp.swift
+  s_992e56c4337e4b::t_f418b0a133868f 38-42
+server/paperchat/main.py
+  s_992e56c4337e4b::t_e87ec53a653e2e 25-26
+  s_992e56c4337e4b::t_b766111d8f1379 90,866
+client/Tests/OfflineReadingCheck.swift
+  s_992e56c4337e4b::t_02f4dd7a28eac4 250
+  s_992e56c4337e4b::t_1acaaebc4b3dbb 112-122,224-249
+client/PaperChat/ChatKitView.swift
+  s_992e56c4337e4b::t_f418b0a133868f 212-218,221-223
+client/Tests/PaperLinkCheck.swift
+  s_992e56c4337e4b::t_eb9fff4632e676 11
+  s_992e56c4337e4b::t_643741131d0ac9 1-10,12-25
+client/PaperChat/Views.swift
+  s_992e56c4337e4b::t_f418b0a133868f 2658-2659
+.env.example
+  s_992e56c4337e4b::t_581da07c091aae 3-4
+README.md
+  s_992e56c4337e4b::t_34cf2c7c86aa3e 83-135
+compose.yaml
+  s_992e56c4337e4b::t_df741921ee5043 70
+docs/chatkit-prototype.md
+  s_992e56c4337e4b::t_b775269db6e94d 80-84,122
+server/paperchat/chatkit_bridge.py
+  s_992e56c4337e4b::t_ead24bb790f71b 38
+server/paperchat/links.py
+  s_992e56c4337e4b::t_1688c70babc2d6 1-61
+server/paperchat/llm.py
+  s_992e56c4337e4b::t_4f77e258ce05ed 168-176
+server/tests/test_links.py
+  s_992e56c4337e4b::t_c6a43bf44bdbaf 1-45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "03def16e7f6320eaf2f0fdc6758278f49a3c779b",
+  "prompts": {},
+  "sessions": {
+    "s_992e56c4337e4b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a124c8-0bf9-7633-9ee4-46394ce1e45f",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Yuki Fujihara <mail@fujiy.dev>"
+    }
+  }
+}
