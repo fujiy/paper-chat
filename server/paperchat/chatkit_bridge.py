@@ -54,7 +54,7 @@ def item_from_row(row):
             quote.append(row["selected_text"])
         return ck.UserMessageItem(
             **common, content=[ck.UserMessageTextContent(text=row["content"])],
-            quoted_text="\n".join(quote) or None, inference_options=ck.InferenceOptions(),
+            quoted_text="\n".join(quote) or None, inference_options=ck.InferenceOptions.model_validate(json.loads(row["inference_options_json"])),
         )
     content = row["content"]
     if row["status"] == "failed":
@@ -171,8 +171,16 @@ async def handle_request(body: bytes, session, settings):
     if user_input.attachments or any(p.type != "input_text" for p in user_input.content):
         raise HTTPException(400, "Only text messages are supported in this prototype")
     content = "\n".join(p.text for p in user_input.content).strip()
-    model = user_input.inference_options.model or context.model
-    effort = context.effort
+    saved_model = saved_effort = None
+    if isinstance(request, ck.ThreadsAddUserMessageReq):
+        load_thread(request.params.thread_id, context, settings)
+        with connect(settings.resolved_database_path) as conn:
+            saved = conn.execute("SELECT model, effort FROM threads WHERE id = ?",
+                                 (request.params.thread_id,)).fetchone()
+            saved_model, saved_effort = saved["model"], saved["effort"]
+    model = user_input.inference_options.model or saved_model or context.model
+    effort = (context.effort if user_input.inference_options.model else
+              saved_effort or context.effort)
     if model and model.startswith("paperchat:"):
         try:
             pair = json.loads(model.removeprefix("paperchat:"))

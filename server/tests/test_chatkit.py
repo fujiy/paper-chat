@@ -193,3 +193,75 @@ def test_standard_model_picker_and_persisted_workflow(tmp_path, monkeypatch):
         assert operation(client, headers, 'threads.list', {}, paper_id='other').json()['data'] == []
         value['inference_options']['model'] = 'paperchat:bad'
         assert operation(client, headers, 'threads.create', {'input': value}).status_code == 422
+
+
+def test_model_selection_survives_reopen_and_is_scoped_to_thread(tmp_path, monkeypatch):
+    calls = []
+
+    async def stream(self, prompt, backend_thread_id=None, model=None, effort=None, mode='paper'):
+        calls.append((model, effort))
+        yield LLMEvent('answer', text='Answer')
+        yield LLMEvent('done')
+
+    monkeypatch.setattr(FakeBackend, 'stream', stream)
+    with client_for(tmp_path, monkeypatch) as client:
+        headers = {'Authorization': f"Bearer {register(client)['access_token']}"}
+        value = user_input()
+        selection = 'paperchat:["chosen-model","high"]'
+        value['inference_options']['model'] = selection
+        result = events(operation(client, headers, 'threads.create', {'input': value}))
+        thread_id = result[0].thread.id
+        user = next(e.item for e in result if isinstance(e, ck.ThreadItemDoneEvent)
+                    and isinstance(e.item, ck.UserMessageItem))
+        assert user.inference_options.model == selection
+        second = {'Authorization': f"Bearer {register(client)['access_token']}"}
+        history = operation(client, second, 'threads.get_by_id', {'thread_id': thread_id}).json()
+        assert history['items']['data'][0]['inference_options']['model'] == selection
+        native = client.get(f'/api/threads/{thread_id}', headers=second).json()
+        assert (native['model'], native['effort']) == ('chosen-model', 'high')
+        # Restarted clients may supply a different default or omit the picker override.
+        params = {'thread_id': thread_id, 'input': user_input('Continue')}
+        events(operation(client, second, 'threads.add_user_message', params,
+                         model='default-model', effort='low'))
+        assert calls[-1] == ('chosen-model', 'high')
+        value['inference_options']['model'] = 'paperchat:["different-model","medium"]'
+        params['input'] = value
+        events(operation(client, second, 'threads.add_user_message', params))
+        assert calls[-1] == ('different-model', 'medium')
+        params['input'] = user_input()
+        events(operation(client, second, 'threads.add_user_message', params))
+        assert calls[-1] == ('different-model', 'medium')
+        # Rejected duplicate requests cannot replace the saved choice.
+        events(operation(client, second, 'threads.add_user_message', params,
+                         client_request_id='once'))
+        params['input'] = value
+        value['inference_options']['model'] = selection
+        assert operation(client, second, 'threads.add_user_message', params,
+                         client_request_id='once').status_code == 409
+        assert client.get(f'/api/threads/{thread_id}', headers=second).json()['model'] == 'different-model'
+        events(operation(client, second, 'threads.create', {'input': user_input()},
+                         model='new-default', effort='low'))
+        assert calls[-1] == ('new-default', 'low')
+
+
+def test_model_storage_migrates_existing_database(tmp_path):
+    import sqlite3
+
+    from paperchat.db import SCHEMA, init, now
+
+    path = tmp_path / 'legacy.sqlite3'
+    legacy = SCHEMA.replace(', model TEXT, effort TEXT', '').replace(
+        "  inference_options_json TEXT NOT NULL DEFAULT '{}',\n", '')
+    with sqlite3.connect(path) as conn:
+        conn.executescript(legacy)
+        conn.execute("INSERT INTO threads (id,title,backend_type,last_used_at,created_at,updated_at) "
+                     "VALUES ('old','Old','fake',?,?,?)", (now(),) * 3)
+        conn.execute("INSERT INTO messages (id,thread_id,role,content,status,created_at,updated_at) "
+                     "VALUES ('m','old','user','Hello','completed',?,?)", (now(),) * 2)
+    init(path)
+    init(path)
+    with connect(path) as conn:
+        row = conn.execute("SELECT * FROM threads WHERE id='old'").fetchone()
+        assert row['model'] is None and row['effort'] is None
+        assert conn.execute('SELECT inference_options_json FROM messages').fetchone()[0] == '{}'
+        assert not conn.execute('PRAGMA foreign_key_check').fetchall()

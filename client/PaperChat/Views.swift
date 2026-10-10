@@ -93,6 +93,11 @@ struct LibraryWorkspace: View {
             )
         }
         .navigationSplitViewStyle(.prominentDetail)
+        #if !os(macOS)
+        // Remove the system toggle at the split-view level so it stays removed
+        // when UIKit moves it between columns during sidebar transitions.
+        .toolbar(removing: .sidebarToggle)
+        #endif
         .onChange(of: isPDFImmersive) { _, isImmersive in
             if isImmersive {
                 visibilityBeforeImmersive = columnVisibility
@@ -113,9 +118,6 @@ struct LibraryWorkspace: View {
 
 struct LibrarySidebar: View {
     @EnvironmentObject private var model: AppModel
-    #if !os(macOS)
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    #endif
 
     var body: some View {
         VStack(spacing: 0) {
@@ -207,10 +209,7 @@ struct LibrarySidebar: View {
         }
         .navigationTitle("")
         #if !os(macOS)
-        // NavigationSplitView owns the default toggle, so remove it from the
-        // sidebar column where SwiftUI installs it. WorkspaceDetail supplies a
-        // stable regular-width toggle alongside the Back button.
-        .toolbar(removing: horizontalSizeClass == .regular ? .sidebarToggle : nil)
+        .toolbar(removing: .sidebarToggle)
         #endif
     }
 }
@@ -299,6 +298,9 @@ struct WorkspaceDetail: View {
         .background {
             WorkspaceShortcuts()
         }
+        #if !os(macOS)
+        .toolbar(removing: .sidebarToggle)
+        #endif
         .toolbar {
             ToolbarItemGroup(placement: backButtonPlacement) {
                 #if !os(macOS)

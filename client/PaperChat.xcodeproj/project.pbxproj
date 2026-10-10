@@ -21,8 +21,8 @@
 		A1000000000000000000000C /* RichTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* RichTextView.swift */; };
 		A1000000000000000000000D /* MinerUCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000014 /* MinerUCache.swift */; };
 		A1000000000000000000000E /* SimulatorBookmarkReproFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000015 /* SimulatorBookmarkReproFixture.swift */; };
-		D10000000000000000000001 /* ChatKitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001; };
-		D10000000000000000000002 /* ChatKit.html in Resources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000002; };
+		D10000000000000000000001 /* ChatKitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001 /* ChatKitView.swift */; };
+		D10000000000000000000002 /* ChatKit.html in Resources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000002 /* ChatKit.html */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -82,8 +82,8 @@
 				A20000000000000000000013 /* RichTextView.swift */,
 				A20000000000000000000014 /* MinerUCache.swift */,
 				A20000000000000000000015 /* SimulatorBookmarkReproFixture.swift */,
-                D20000000000000000000001 /* ChatKitView.swift */,
-                D20000000000000000000002 /* ChatKit.html */,
+				D20000000000000000000001 /* ChatKitView.swift */,
+				D20000000000000000000002 /* ChatKit.html */,
 				A20000000000000000000009 /* Info.plist */,
 			);
 			path = PaperChat;
@@ -170,7 +170,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-                D10000000000000000000002 /* ChatKit.html in Resources */,
+				D10000000000000000000002 /* ChatKit.html in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -192,7 +192,7 @@
 				A1000000000000000000000C /* RichTextView.swift in Sources */,
 				A1000000000000000000000D /* MinerUCache.swift in Sources */,
 				A1000000000000000000000E /* SimulatorBookmarkReproFixture.swift in Sources */,
-                D10000000000000000000001 /* ChatKitView.swift in Sources */,
+				D10000000000000000000001 /* ChatKitView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -223,6 +223,7 @@
 		AA0000000000000000000003 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
@@ -236,6 +237,7 @@
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.fujiy.PaperChat;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = auto;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -247,6 +249,7 @@
 		AA0000000000000000000004 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
@@ -260,6 +263,7 @@
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.fujiy.PaperChat;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = auto;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SWIFT_EMIT_LOC_STRINGS = YES;

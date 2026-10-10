@@ -9,11 +9,14 @@ struct ChatKitConversation: View {
     @AppStorage("chatKitDomainKey") private var domainKey = "local-dev"
 
     private var configuration: String {
+        let selectedModel = model.models.first { $0.model == session.selectedThread?.model }
+            ?? model.selectedModel
+        let selectedEffort = session.selectedThread?.effort ?? model.selectedEffortID
         var context: [String: Any] = ["current_page_index": session.pageIndex]
         if !session.isManagement { context["paper_id"] = session.id }
         context["selected_text"] = session.selectedText
-        context["model"] = model.selectedModel?.model
-        context["effort"] = model.selectedEffortID
+        context["model"] = selectedModel?.model
+        context["effort"] = selectedEffort
         let value: [String: Any] = [
             "threadID": session.selectedThread?.id as Any? ?? NSNull(),
             "context": context,
@@ -28,7 +31,7 @@ struct ChatKitConversation: View {
                         "id": "paperchat:" + String(decoding: pair, as: UTF8.self),
                         "label": "\(option.displayName) · \(effort)",
                         "description": option.description,
-                        "default": option.id == model.selectedModelID && effort == model.selectedEffortID,
+                        "default": option.id == selectedModel?.id && effort == selectedEffort,
                     ]
                 }
             },

@@ -810,6 +810,12 @@ final class AppModel: ObservableObject {
     func chatKitFinished(in session: ChatSession) async {
         session.isSending = false
         session.draft = ""
+        if let id = session.selectedThread?.id {
+            do {
+                let thread = try await client.thread(id: id)
+                if session.selectedThread?.id == id { session.selectedThread = thread }
+            } catch { report(error) }
+        }
         await refreshConversation(in: session)
         await refreshChatOverviews()
     }

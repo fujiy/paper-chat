@@ -70,7 +70,12 @@ not enabled. History uses stable cursor pagination.
   mutations). Attachments, feedback and retry remain disabled as well.
 - Model/effort combinations use the standard model picker's opaque identifier;
   the adapter decodes them before calling Codex. A selection overrides the native
-  fallback model and effort for that request.
+  fallback model and effort for that request. Model and effort are saved on the
+  thread when a message is accepted and restored as composer defaults on reopening
+  or restarting the app. Each saved user message retains its inference options for
+  ChatKit history restoration. Subsequent requests without a picker override use
+  the thread's saved selection ahead of native defaults. Existing conversations
+  acquire a saved selection on their next send; unsent picker changes are not saved.
 - The bundled page uses the SDK's development `local-dev` domain key. A separate
   production web deployment needs its own registered origin/domain configuration.
   UI assets are fetched from OpenAI's CDN; this is not an offline UI bundle.

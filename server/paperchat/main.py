@@ -795,12 +795,16 @@ async def send_message(
         ).fetchone()
         if existing:
             raise HTTPException(409, "client_request_id already used")
+        payload = payload.model_copy(update={
+            "model": payload.model or thread["model"],
+            "effort": payload.effort or thread["effort"],
+        })
         acquired = conn.execute(
             """
-            UPDATE threads SET backend_status = 'streaming', updated_at = ?
+            UPDATE threads SET backend_status = 'streaming', updated_at = ?, model = ?, effort = ?
             WHERE id = ? AND backend_status = 'ready'
             """,
-            (timestamp, thread_id),
+            (timestamp, payload.model, payload.effort, thread_id),
         )
         if acquired.rowcount != 1:
             raise HTTPException(409, "Thread is already generating a response")
@@ -815,8 +819,8 @@ async def send_message(
             """
             INSERT INTO messages (
               id, thread_id, role, content, page_refs_json, selected_text,
-              client_request_id, status, created_at, updated_at
-            ) VALUES (?, ?, 'user', ?, ?, ?, ?, 'completed', ?, ?)
+              client_request_id, status, created_at, updated_at, inference_options_json
+            ) VALUES (?, ?, 'user', ?, ?, ?, ?, 'completed', ?, ?, ?)
             """,
             (
                 user_id,
@@ -827,6 +831,9 @@ async def send_message(
                 payload.client_request_id,
                 timestamp,
                 timestamp,
+                json.dumps({"model": "paperchat:" + json.dumps([payload.model, payload.effort],
+                           separators=(",", ":"))} if payload.model and payload.effort else
+                           {"model": payload.model} if payload.model else {}),
             ),
         )
         conn.execute(

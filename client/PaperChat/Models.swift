@@ -92,11 +92,13 @@ struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     let backendType: String
     let backendThreadID: String?
     let backendStatus: String
+    let model: String?
+    let effort: String?
     let isPrimary: Int
     let lastUsedAt: String
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, backendType, backendStatus, isPrimary, lastUsedAt
+        case id, title, backendType, backendStatus, isPrimary, lastUsedAt, model, effort
         case paperID = "paperId"
         case backendThreadID = "backendThreadId"
     }

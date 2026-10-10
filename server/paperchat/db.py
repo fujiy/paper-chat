@@ -31,13 +31,14 @@ CREATE TABLE IF NOT EXISTS threads (
   id TEXT PRIMARY KEY, paper_id TEXT, title TEXT NOT NULL,
   backend_type TEXT NOT NULL, backend_thread_id TEXT, backend_status TEXT NOT NULL DEFAULT 'ready',
   summary TEXT, is_primary INTEGER NOT NULL DEFAULT 0, last_used_at TEXT NOT NULL,
-  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, model TEXT, effort TEXT,
   FOREIGN KEY(paper_id) REFERENCES papers(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL,
   page_refs_json TEXT NOT NULL DEFAULT '[]', selected_text TEXT, client_request_id TEXT,
   backend_turn_id TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  inference_options_json TEXT NOT NULL DEFAULT '{}',
   FOREIGN KEY(thread_id) REFERENCES threads(id) ON DELETE CASCADE,
   UNIQUE(thread_id, client_request_id)
 );
@@ -112,7 +113,8 @@ def init(path: Path) -> None:
                 table_sql = SCHEMA.split("CREATE TABLE IF NOT EXISTS threads (", 1)[1]
                 table_sql = table_sql.split(";", 1)[0]
                 conn.execute("CREATE TABLE threads_new (" + table_sql)
-                conn.execute("INSERT INTO threads_new SELECT * FROM threads")
+                names = ", ".join(row["name"] for row in columns)
+                conn.execute(f"INSERT INTO threads_new ({names}) SELECT {names} FROM threads")
                 conn.execute("DROP TABLE threads")
                 conn.execute("ALTER TABLE threads_new RENAME TO threads")
                 conn.execute(
@@ -126,6 +128,16 @@ def init(path: Path) -> None:
                 raise
             finally:
                 conn.execute("PRAGMA foreign_keys = ON")
+
+        for table, additions in {
+            "threads": {"model": "TEXT", "effort": "TEXT"},
+            "messages": {"inference_options_json": "TEXT NOT NULL DEFAULT '{}'"},
+        }.items():
+            existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+            for name, definition in additions.items():
+                if name not in existing:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+        conn.commit()
 
         bookmark_columns = conn.execute("PRAGMA table_info(bookmarks)").fetchall()
         if any(row["name"] == "scroll_offset" for row in bookmark_columns):
