@@ -1,0 +1,46 @@
+client/PaperChat/ChatKitView.swift
+  s_7068e5d5f8253d::t_c8ba6adeb79bfe 12-14,18-19,34
+server/paperchat/chatkit_bridge.py
+  s_7068e5d5f8253d::t_f536d582155fc7 182-183
+  s_7068e5d5f8253d::t_c8ba6adeb79bfe 57,174-181
+client/PaperChat/Models.swift
+  s_7068e5d5f8253d::t_c8ba6adeb79bfe 95-96,101
+server/paperchat/db.py
+  s_7068e5d5f8253d::t_c8ba6adeb79bfe 34,41,116-117,132-140
+  s_7068e5d5f8253d::t_c744fc8449f471 141
+server/tests/test_chatkit.py
+  s_7068e5d5f8253d::t_f536d582155fc7 196-267
+server/paperchat/main.py
+  s_7068e5d5f8253d::t_c8ba6adeb79bfe 798-801,804,807,822-823,834-836
+docs/chatkit-prototype.md
+  s_7068e5d5f8253d::t_f536d582155fc7 73-78
+client/PaperChat/AppModel.swift
+  s_7068e5d5f8253d::t_f536d582155fc7 813-818
+client/PaperChat/Views.swift
+  s_7c782965286e03::t_9f96d8bdb81248 99,212,301-303
+  s_7c782965286e03::t_b71f0e337a2e6f 96-98,100
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e860cf5107f8398a5daa695668e21276da832679",
+  "prompts": {},
+  "sessions": {
+    "s_7068e5d5f8253d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0f634-9c59-7f13-862c-1304365f7215",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Yuki Fujihara <mail@fujiy.dev>"
+    },
+    "s_7c782965286e03": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a11e94-4941-7e42-b361-61a58c8f32cf",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Yuki Fujihara <mail@fujiy.dev>"
+    }
+  }
+}
