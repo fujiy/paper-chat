@@ -4,6 +4,7 @@ import SwiftUI
 struct ChatRichText: View {
     let source: String
     var isStreaming = false
+    var onOpenPaper: ((URL) -> Void)? = nil
     let onOpenPage: (Int) -> Void
 
     private var blocks: [ChatRichBlock] {
@@ -88,10 +89,14 @@ struct ChatRichText: View {
             }
         }
         .environment(\.openURL, OpenURLAction { url in
+            if PaperLink.recognizes(url), url.host != "page", let onOpenPaper {
+                DispatchQueue.main.async { onOpenPaper(url) }
+                return .handled
+            }
             guard let page = PageCitationLinks.pageNumber(from: url) else {
                 return .systemAction
             }
-            onOpenPage(page)
+            DispatchQueue.main.async { onOpenPage(page) }
             return .handled
         })
     }

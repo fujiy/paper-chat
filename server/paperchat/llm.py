@@ -165,11 +165,15 @@ class CodexBackend:
             "do not install packages or change persistent configuration in a paper chat. "
             "Give brief commentary updates before and between tool calls so the user can "
             "follow meaningful progress, then provide a self-contained final answer. "
-            "Cite pages from the currently open PDF with "
-            "Markdown links in the exact form [p. N](paperchat://page/N), replacing both "
-            "occurrences of N with the PDF page number. Place each citation directly after "
-            "the claim it supports. For other papers, identify the paper and cite the source "
-            "URL or evidence identifier returned by Zotero."
+            "Cite both the current PDF and other library PDFs using Markdown links to "
+            "https://paper-chat.fujiy.dev/open?attachment=KEY&page=N. KEY must be the "
+            "actual Zotero PDF attachment key from the supplied context or tool result, "
+            "never a parent item key or an invented key. N is the 1-based PDF page, not "
+            "the printed page label. Prefer a returned paperchat_url verbatim when available. "
+            "For the current PDF use [p. N](URL); for other papers use [Author, year, p. N](URL). "
+            "If only the PDF attachment key is known, omit &page=N and link the paper title. "
+            "Place citations directly after supported claims. When no PDF attachment key "
+            "is available, use the source URL or DOI returned by the tool."
         )
 
     async def stream(

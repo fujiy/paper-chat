@@ -109,6 +109,17 @@ private final class StubProtocol: URLProtocol, @unchecked Sendable {
         await model.open(libraryPaper: library)
         precondition(StubProtocol.state.requestCount == beforeOpen, "Cached paper opening required network")
         let session = model.activeSession!
+        model.isAuthenticated = true
+        await model.openURL(PaperLink(attachmentKey: "ABCDEFGH", page: 1).url)
+        precondition(model.activeSession?.id == paper.id && session.pageIndex == 0)
+        await model.openURL(PaperLink(attachmentKey: "ABCDEFGH", page: 999).url)
+        precondition(session.pageIndex == 0 && model.errorMessage == "The linked page is outside this PDF.")
+        model.errorMessage = nil
+        await model.openURL(PaperLink(attachmentKey: "ABCDEFGH", page: 3).url)
+        precondition(session.pageIndex == 2 && model.errorMessage == nil)
+        await model.openURL(PaperLink(attachmentKey: "ABCDEFGH").url)
+        precondition(session.pageIndex == 2, "A link without a page lost the reading position")
+        precondition(StubProtocol.state.requestCount == beforeOpen, "Offline citation navigation required network")
         session.pdfSearchQuery = "Cached paper"
         await model.searchPDF("Cached paper", in: session)
         precondition(session.pdfSearchResults.count == 3, "PDF text search depended on the server")
@@ -210,6 +221,32 @@ private final class StubProtocol: URLProtocol, @unchecked Sendable {
             if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
             try FileManager.default.copyItem(at: store.root, to: destination)
         }
-        print("PASS: offline cold restore, cached PDF without network, missing PDF, local search, durable reading position, reconnect synchronization, server isolation, stale write protection")
+        let citationStore = OfflineStore(serverURL: URL(string: "http://citation-check.invalid/")!, directory: directory)
+        let reference = Paper(id: "reference", title: "Another reference", authors: [], year: nil,
+            identifiers: [PaperIdentifier(kind: "zotero", libraryType: "user", libraryID: "1", value: "REF12345")],
+            readingState: nil, lastOpenedAt: nil, starred: false)
+        var citationWorkspace = OfflineWorkspace()
+        citationWorkspace.papers = [paper.id: paper, reference.id: reference]
+        citationWorkspace.openPaperIDs = [paper.id]
+        citationWorkspace.activePaperID = paper.id
+        try await citationStore.saveWorkspace(citationWorkspace)
+        for entry in [paper, reference] {
+            _ = try await PDFCache.shared.store(pdfData as Data, paperID: entry.id, etag: "citation",
+                root: citationStore.root.appending(path: "papers"))
+        }
+        let citations = AppModel(client: api, offlineStore: citationStore, monitorNetwork: false)
+        await citations.restoreLocalWorkspace()
+        citations.isAuthenticated = true
+        citations.isOffline = true
+        let requestsBeforeCitation = StubProtocol.state.requestCount
+        await citations.openURL(PaperLink(attachmentKey: "REF12345", page: 2).url)
+        precondition(citations.activeSession?.id == reference.id && citations.activeSession?.pageIndex == 1)
+        await citations.openURL(URL(string: "paperchat://open?attachment=ABCDEFGH&page=3")!)
+        precondition(citations.activeSession?.id == paper.id && citations.activeSession?.pageIndex == 2)
+        await citations.openURL(PaperLink(attachmentKey: "REF12345").url)
+        precondition(citations.activeSession?.id == reference.id && citations.activeSession?.pageIndex == 1)
+        precondition(citations.openSessions.count == 2, "Citation links created duplicate tabs")
+        precondition(StubProtocol.state.requestCount == requestsBeforeCitation)
+        print("PASS: offline cold restore, cached PDF without network, cross-paper citation navigation, page validation, missing PDF, local search, durable reading position, reconnect synchronization, server isolation, stale write protection")
     }
 }

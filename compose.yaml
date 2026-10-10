@@ -67,6 +67,7 @@ services:
     command: zotero-search
     restart: unless-stopped
     environment: &zotero-environment
+      PAPERCHAT_PUBLIC_BASE_URL: ${PAPERCHAT_LINK_BASE_URL:-https://paper-chat.fujiy.dev}
       ZOTERO_API_KEY: ${ZOTERO_API_KEY:-}
       ZOTERO_LIBRARY_TYPE: ${ZOTERO_LIBRARY_TYPE:-user}
       ZOTERO_LIBRARY_ID: ${ZOTERO_LIBRARY_ID:-}

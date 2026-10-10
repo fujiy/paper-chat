@@ -209,10 +209,18 @@ private final class ChatKitCoordinator: NSObject, WKScriptMessageHandler, WKNavi
     }
 
     private func openLink(_ url: URL) {
-        if url.scheme == "https", url.host == "paperchat.invalid",
+        if PaperLink.recognizes(url), url.host != "page" {
+            // Navigation callbacks may run inside a WebKit layout/update pass.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                Task { await self.model.openURL(url) }
+            }
+        } else if url.scheme == "https", url.host == "paperchat.invalid",
            url.path.hasPrefix("/page/"), let page = Int(url.lastPathComponent), page > 0,
            let paper = session as? PaperSession {
-            model.pageChanged(page - 1, in: paper)
+            DispatchQueue.main.async { [weak self] in
+                self?.model.pageChanged(page - 1, in: paper)
+            }
         } else if ["https", "http"].contains(url.scheme ?? "") {
             #if os(macOS)
             NSWorkspace.shared.open(url)

@@ -42,6 +42,7 @@ final class AppModel: ObservableObject {
     private var workspaceGeneration = UUID()
     private var paperCacheRoot: URL? { offlineStore?.root.appending(path: "papers", directoryHint: .isDirectory) }
     private var persistenceTask: Task<Void, Never>?
+    private var pendingPaperLink: PaperLink?
     private var sessionRestoreTask: Task<Void, Never>?
     private var paperRefreshTasks: [String: Task<Void, Never>] = [:]
     private var isRefreshingLibrary = false
@@ -143,10 +144,12 @@ final class AppModel: ObservableObject {
         if isAuthenticated {
             await refreshLibrary()
             await loadModels()
+            await openPendingPaperLink()
         }
     }
 
     func signOut() async {
+        pendingPaperLink = nil
         let store = offlineStore
         let revoke = !isOffline
         workspaceGeneration = UUID()
@@ -515,6 +518,41 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func openURL(_ url: URL) async {
+        if url.isFileURL {
+            await openExternalPDF(at: url)
+            return
+        }
+        guard PaperLink.recognizes(url) else { return }
+        guard let link = PaperLink(url: url) else {
+            errorMessage = "This PaperChat link is invalid."
+            return
+        }
+        pendingPaperLink = link
+        if !isAuthenticated { await restoreSession() }
+        guard isAuthenticated else { return } // Continue after sign-in.
+        await openPendingPaperLink()
+    }
+
+    private func openPendingPaperLink() async {
+        guard isAuthenticated, let link = pendingPaperLink else { return }
+        pendingPaperLink = nil
+        await perform {
+            let paper = try await resolvePaper(attachmentKey: link.attachmentKey)
+            let session = try await openPaper(paper, fromSidebar: false)
+            if let page = link.page {
+                guard let url = session.pdfURL, let document = PDFDocument(url: url),
+                      page <= document.pageCount else {
+                    errorMessage = "The linked page is outside this PDF."
+                    return
+                }
+                session.pdfViewportTarget = nil
+                session.pdfHighlightTarget = nil
+                pageChanged(page - 1, in: session)
+            }
+        }
+    }
+
     /// Opens a PDF selected by Zotero's external PDF viewer integration.
     /// Zotero hands macOS a file URL such as
     /// `file:///…/Zotero/storage/FQCTIC3M/document.pdf`; the storage directory
@@ -828,10 +866,7 @@ final class AppModel: ObservableObject {
 
     func openMatchedReference(_ reference: DocumentReference) async {
         guard let attachmentKey = reference.matchedAttachmentKey else { return }
-        await perform {
-            let paper = try await resolvePaper(attachmentKey: attachmentKey)
-            _ = try await openPaper(paper, fromSidebar: false)
-        }
+        await openURL(PaperLink(attachmentKey: attachmentKey).url)
     }
 
     func loadBookmarks(in session: PaperSession) async {

@@ -35,6 +35,7 @@ def citation_links(text: str) -> str:
             r"(?<![\\$])\$([^\s$](?:[^$\n]*?[^\s$])?)\$(?![\w$])",
             lambda match: r"\(" + match[1] + r"\)", blocks[index],
         )
+        block = block.replace("paperchat://open?", "https://paper-chat.fujiy.dev/open?")
         block = re.sub(r"paperchat://page/(\d+)", r"https://paperchat.invalid/page/\1", block)
         blocks[index] = re.sub(
             r"\[p\.\s*(\d+)\](?!\()",

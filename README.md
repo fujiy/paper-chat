@@ -80,6 +80,59 @@ API container with `--prompt '...'`. Reuse the printed ID with `--thread-id` for
 follow-up. The script checks SSE completion and persisted answers and revokes
 its temporary API session; the management conversation remains in Chats.
 
+## Paper and page links
+
+Use a Zotero **PDF attachment key**, not its parent item key:
+
+```text
+https://paper-chat.fujiy.dev/open?attachment=ABCD1234&page=12
+paperchat://open?attachment=ABCD1234&page=12
+```
+
+`page` is the 1-based PDF page, independent of printed page labels. Omit it to
+open the paper at its saved position. The key resolves against the app's configured
+server and its single Zotero library. Both chat renderers and References use the
+same opening path; cached PDFs also work offline. Invalid links and pages outside
+the PDF report an error. Links received before sign-in continue after sign-in.
+Legacy `paperchat://page/N` citations remain supported inside paper chats.
+
+The API serves `/.well-known/apple-app-site-association` without authentication
+or redirects, associating only `/open` with PaperChat. `/open` serves a browser
+fallback with an explicit `paperchat://` launch button. Keep both routes publicly
+accessible through the HTTPS proxy, including bypassing any Cloudflare Access
+login or challenge for the association file. API authentication stays unchanged.
+
+The Xcode target includes `applinks:paper-chat.fujiy.dev` in its Associated Domains
+entitlement. Build/install a newly signed app with this capability enabled in its
+provisioning profile. The AASA application identifier must match the signed app's
+Application Identifier (currently expected as `4C4TXA6S8J.dev.fujiy.PaperChat`).
+Apple caches AASA files; to test, first publish the file, then install the app and
+open a link from Notes or another application. Browser navigation may stay in the
+browser depending on browser support and the user's earlier choice.
+
+Compose supplies `PAPERCHAT_PUBLIC_BASE_URL` to Zotero Search from
+`PAPERCHAT_LINK_BASE_URL`, defaulting to the HTTPS link domain above. Its MCP
+search/fetch/page results include `paperchat_url` whenever a valid PDF key is
+available. Existing source URLs and evidence IDs are preserved. For Web ChatGPT,
+ask it to use returned `paperchat_url` values verbatim as Markdown citation links;
+ordinary source/DOI URLs remain appropriate for papers without a library PDF.
+The native paper-chat instructions use the same URL format.
+
+Verification:
+
+```sh
+.venv/bin/ruff check server
+.venv/bin/pytest -q
+xcrun swiftc -parse-as-library -swift-version 6 \
+  -module-cache-path /tmp/paperchat-swift-cache \
+  client/PaperChat/PaperLink.swift client/Tests/PaperLinkCheck.swift \
+  -o /tmp/paperchat-link-check
+/tmp/paperchat-link-check
+```
+
+The offline integration command in `docs/chatkit-prototype.md` additionally checks
+cross-paper navigation, reuse of existing tabs, page validation and saved positions.
+
 ## Zotero Search submodule
 
 Zotero Search lives in `services/zotero-search` as an independent repository.

@@ -2655,7 +2655,8 @@ struct MessageBubble: View {
             } else {
                 ChatRichText(
                     source: message.content,
-                    isStreaming: message.status == "streaming"
+                    isStreaming: message.status == "streaming",
+                    onOpenPaper: { url in Task { await model.openURL(url) } }
                 ) { page in
                     if let paper = session as? PaperSession {
                         model.pageChanged(page - 1, in: paper)

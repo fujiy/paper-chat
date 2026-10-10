@@ -25,6 +25,7 @@
 		D10000000000000000000002 /* ChatKit.html in Resources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000002 /* ChatKit.html */; };
 		E10000000000000000000001 /* OfflineStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20000000000000000000001 /* OfflineStore.swift */; };
 		E10000000000000000000002 /* ChatKitAssetServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20000000000000000000002 /* ChatKitAssetServer.swift */; };
+		F10000000000000000000001 /* PaperLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000001 /* PaperLink.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -47,6 +48,7 @@
 		D20000000000000000000002 /* ChatKit.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = ChatKit.html; sourceTree = "<group>"; };
 		E20000000000000000000001 /* OfflineStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineStore.swift; sourceTree = "<group>"; };
 		E20000000000000000000002 /* ChatKitAssetServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatKitAssetServer.swift; sourceTree = "<group>"; };
+		F20000000000000000000001 /* PaperLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaperLink.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -75,6 +77,7 @@
 		A40000000000000000000002 /* PaperChat */ = {
 			isa = PBXGroup;
 			children = (
+				F20000000000000000000001 /* PaperLink.swift */,
 				A20000000000000000000001 /* PaperChatApp.swift */,
 				A20000000000000000000002 /* Models.swift */,
 				A20000000000000000000003 /* KeychainStore.swift */,
@@ -187,6 +190,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F10000000000000000000001 /* PaperLink.swift in Sources */,
 				A10000000000000000000001 /* PaperChatApp.swift in Sources */,
 				A10000000000000000000002 /* Models.swift in Sources */,
 				A10000000000000000000003 /* KeychainStore.swift in Sources */,
@@ -233,6 +237,7 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_ENTITLEMENTS = PaperChat/PaperChat.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 4C4TXA6S8J;
@@ -259,6 +264,7 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_ENTITLEMENTS = PaperChat/PaperChat.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 4C4TXA6S8J;

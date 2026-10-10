@@ -77,9 +77,11 @@ not enabled. History uses stable cursor pagination.
   opacity to one, inside the official ChatKit frame. Expanded workflow contents
   need the same scoped opacity correction. This depends on internal DOM selectors
   and should be rechecked when ChatKit changes.
-- Page citations are presented as `https://paperchat.invalid/page/N` links so the
-  renderer retains them. Native navigation intercepts them without fetching that
-  hostname. The database keeps the original citation text.
+- New citations use `https://paper-chat.fujiy.dev/open?attachment=KEY&page=N`
+  and native navigation opens the specified library PDF and page. Legacy page-only
+  citations are presented as `https://paperchat.invalid/page/N`; native navigation
+  intercepts these for the current PDF without fetching that hostname. The database
+  keeps the original citation text.
 - Progress uses standard ChatKit workflows and custom tasks, separate from the
   answer, with collapsed summaries and running/completed indicators. Repeated
   events update the same task; append events accumulate text. New ChatKit turns
@@ -117,7 +119,7 @@ Run from the repository root on macOS:
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 swift_options=(-sdk "$(xcrun --sdk macosx --show-sdk-path)" -target "$(uname -m)-apple-macos15.0" \
   -swift-version 6 -module-cache-path /tmp/paperchat-swift-cache)
-sources=(client/PaperChat/{Models,APIClient,KeychainStore,OfflineStore,PDFCache,MinerUCache,AppModel}.swift)
+sources=(client/PaperChat/{PaperLink,Models,APIClient,KeychainStore,OfflineStore,PDFCache,MinerUCache,AppModel}.swift)
 xcrun swiftc -parse-as-library "${swift_options[@]}" \
   "${sources[@]}" client/Tests/OfflineReadingCheck.swift -o /tmp/paperchat-offline-reading-check
 /tmp/paperchat-offline-reading-check

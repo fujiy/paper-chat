@@ -22,6 +22,8 @@ from .auth import (
 from .config import load_settings
 from .db import as_dict, connect, init, new_id, now
 from .library import ZoteroLibrary, ZoteroLibraryError
+from .links import paper_url
+from .links import router as links_router
 from .llm import backend
 
 
@@ -85,6 +87,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="PaperChat", version="0.1.0", lifespan=lifespan)
+app.include_router(links_router)
 Session = Annotated[dict[str, object], Depends(current_session)]
 SearchQuery = Annotated[str, Query(min_length=1)]
 
@@ -860,6 +863,7 @@ async def send_message(
         f"{context}\n</paper_context>\n"
         f"<selected_text>{payload.selected_text or ''}</selected_text>\n"
         f"Current Zotero attachment key: {identifier['value'] if identifier else 'unknown'}\n"
+        f"Current PaperChat citation URL: {paper_url(identifier['value'], page_number) if identifier else 'unavailable'}\n"
         f"Current PDF page: {page_number}\nQuestion: {payload.content}"
     )
 
