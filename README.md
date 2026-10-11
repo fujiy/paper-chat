@@ -96,19 +96,20 @@ same opening path; cached PDFs also work offline. Invalid links and pages outsid
 the PDF report an error. Links received before sign-in continue after sign-in.
 Legacy `paperchat://page/N` citations remain supported inside paper chats.
 
-The API serves `/.well-known/apple-app-site-association` without authentication
-or redirects, associating only `/open` with PaperChat. `/open` serves a browser
-fallback with an explicit `paperchat://` launch button. Keep both routes publicly
-accessible through the HTTPS proxy, including bypassing any Cloudflare Access
-login or challenge for the association file. API authentication stays unchanged.
+External HTTPS links open `/open`, which displays an explicit **Open in PaperChat**
+button linking to `paperchat://open?...`. The button preserves the PDF attachment
+key and optional page. If the browser requests permission to open the app, choose
+Open. PaperChat must be installed and signed in to the configured server. Links
+inside PaperChat still open the target PDF directly through the shared handler.
+Keep `/open` publicly accessible through the HTTPS proxy; API authentication
+stays unchanged.
 
-The Xcode target includes `applinks:paper-chat.fujiy.dev` in its Associated Domains
-entitlement. Build/install a newly signed app with this capability enabled in its
-provisioning profile. The AASA application identifier must match the signed app's
-Application Identifier (currently expected as `4C4TXA6S8J.dev.fujiy.PaperChat`).
-Apple caches AASA files; to test, first publish the file, then install the app and
-open a link from Notes or another application. Browser navigation may stay in the
-browser depending on browser support and the user's earlier choice.
+The app registers the `paperchat` URL scheme in `Info.plist` and receives it through
+SwiftUI's `.onOpenURL`. It does not use the Associated Domains entitlement or
+Universal Links. The former `/.well-known/apple-app-site-association` endpoint
+returns an empty association to withdraw the previous configuration. Rebuild and
+install the app after removing the old entitlement. Verify by opening an HTTPS
+link in a browser and clicking **Open in PaperChat**.
 
 Compose supplies `PAPERCHAT_PUBLIC_BASE_URL` to Zotero Search from
 `PAPERCHAT_LINK_BASE_URL`, defaulting to the HTTPS link domain above. Its MCP

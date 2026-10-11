@@ -37,10 +37,6 @@ struct PaperChatWindow: View {
             .onOpenURL { url in
                 Task { await model.openURL(url) }
             }
-            .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
-                guard let url = activity.webpageURL else { return }
-                Task { await model.openURL(url) }
-            }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active {
                     Task { await model.appDidBecomeActive() }

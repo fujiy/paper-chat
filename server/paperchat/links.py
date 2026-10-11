@@ -18,10 +18,8 @@ def paper_url(attachment: str, page: int | None = None) -> str:
 
 @router.get("/.well-known/apple-app-site-association", include_in_schema=False)
 def association():
-    return {"applinks": {"details": [{
-        "appIDs": ["4C4TXA6S8J.dev.fujiy.PaperChat"],
-        "components": [{"/": "/open"}],
-    }]}}
+    # Withdraw the former Universal Links association, including cached clients.
+    return {"applinks": {"details": []}}
 
 
 @router.get("/open", response_class=HTMLResponse, include_in_schema=False)
@@ -51,9 +49,11 @@ a {{ display: inline-block; padding: .8rem 1.2rem; border-radius: .7rem;
      background: #2457c5; color: white; text-decoration: none; }}
 p {{ line-height: 1.6; }}
 </style></head><body><h1>Open in PaperChat</h1><p>{location}</p>
+<p>Click the button below to open this PDF in the PaperChat app.</p>
 <p><a href="{app_url}">Open in PaperChat</a></p>
-<p>Install PaperChat and sign in to the server containing this Zotero PDF.
-If the app does not open, check that PaperChat is installed.</p>
+<p>If your browser asks to open PaperChat, choose Open.</p>
+<p>PaperChat must be installed and signed in to the server containing this Zotero PDF.
+If nothing happens, check that PaperChat is installed and try the button again.</p>
 </body></html>""", headers={
         "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
         "Referrer-Policy": "no-referrer",

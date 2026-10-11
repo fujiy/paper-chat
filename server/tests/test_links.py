@@ -8,14 +8,13 @@ def test_public_link_routes_need_no_authentication():
     response = client.get('/.well-known/apple-app-site-association', follow_redirects=False)
     assert response.status_code == 200
     assert response.headers['content-type'] == 'application/json'
-    assert response.json() == {'applinks': {'details': [{
-        'appIDs': ['4C4TXA6S8J.dev.fujiy.PaperChat'],
-        'components': [{'/': '/open'}],
-    }]}}
+    assert response.json() == {'applinks': {'details': []}}
     response = client.get('/open?attachment=ABCD1234&page=12', follow_redirects=False)
     assert response.status_code == 200
     assert 'paperchat://open?attachment=ABCD1234&amp;page=12' in response.text
     assert 'PDF page 12' in response.text
+    assert 'Click the button below' in response.text
+    assert '<a href="paperchat://open?attachment=ABCD1234&amp;page=12">' in response.text
     assert 'frame-ancestors' in response.headers['content-security-policy']
     response = client.get('/open?attachment=ABCD1234')
     assert 'paperchat://open?attachment=ABCD1234"' in response.text
