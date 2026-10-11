@@ -1,0 +1,36 @@
+client/Tests/PDFInitialLayoutCheck.swift
+  s_a3b838a28ab6cc::t_985ec7a59dc006 98,100,103-104,106,109,112,114-127
+  s_a3b838a28ab6cc::t_0651898d10d2eb 97
+  s_a3b838a28ab6cc::t_702f8a4f1c03e6 99
+  s_a3b838a28ab6cc::t_8ad2b6a900308e 101-102
+  s_a3b838a28ab6cc::t_6181f3ad155cb5 105
+  s_a3b838a28ab6cc::t_7f7b6dcb3a49e5 107-108
+  s_a3b838a28ab6cc::t_915937a8c5f153 110-111
+  s_a3b838a28ab6cc::t_d2bb52ccaf3001 113
+  s_a3b838a28ab6cc::t_094548a473acac 2-3,18,44,55-58,130
+client/PaperChat/AppModel.swift
+  s_a3b838a28ab6cc::t_1c5ddad6d4172b 69-70,165-167,245,1135,1449-1452,1481-1510,1512,1523,1542-1544
+client/Tests/PDFThumbnailCheck.swift
+  s_a3b838a28ab6cc::t_2c825b9d52601c 1-50
+client/PaperChat/PDFKitView.swift
+  s_a3b838a28ab6cc::t_1c5ddad6d4172b 195-196,260,265,270,379-391,397-398,400-402,611,647,739-740,747,762-763,768,789-791,805-811,816,886,923-927,933-971
+  s_a3b838a28ab6cc::t_ef19f840f11f54 648,972-973
+client/Tests/OfflineReadingCheck.swift
+  s_a3b838a28ab6cc::t_c9c6fdcfdc980d 126-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c00d0dde5bb37392408a7013dd54550a493c6ca2",
+  "prompts": {},
+  "sessions": {
+    "s_a3b838a28ab6cc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a129b1-6c31-78c3-a952-b2f0478c6fbb",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Yuki Fujihara <mail@fujiy.dev>"
+    }
+  }
+}
