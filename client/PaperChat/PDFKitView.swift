@@ -192,6 +192,8 @@ extension PDFKitView {
         var lastThumbnailInteractionToken: UUID?
         var appliedStructure: DocumentStructure?
         var structureLinkAnnotations: [(PDFPage, PDFAnnotation)] = []
+        private var stateSyncPending = false
+        private var selectionSyncPending = false
         nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
         #if os(macOS)
         var pendingInitialViewport: (pageIndex: Int, zoomScale: Double, scrollOffset: Double)?
@@ -255,17 +257,17 @@ extension PDFKitView {
             observers.append(NotificationCenter.default.addObserver(
                 forName: .PDFViewPageChanged, object: view, queue: .main
             ) { [weak self] _ in
-                Task { @MainActor in self?.scheduleStateSync() }
+                MainActor.assumeIsolated { self?.scheduleStateSync() }
             })
             observers.append(NotificationCenter.default.addObserver(
                 forName: .PDFViewScaleChanged, object: view, queue: .main
             ) { [weak self] _ in
-                Task { @MainActor in self?.scheduleStateSync() }
+                MainActor.assumeIsolated { self?.scheduleStateSync() }
             })
             observers.append(NotificationCenter.default.addObserver(
                 forName: .PDFViewSelectionChanged, object: view, queue: .main
             ) { [weak self] _ in
-                Task { @MainActor in self?.scheduleSelectionSync() }
+                MainActor.assumeIsolated { self?.scheduleSelectionSync() }
             })
             observeScrolling()
         }
@@ -374,16 +376,30 @@ extension PDFKitView {
 
         private func scheduleStateSync() {
             guard !isRestoring else { return }
-            DispatchQueue.main.async { [weak self] in
-                guard let self, !self.isRestoring else { return }
+            guard !stateSyncPending else { return }
+            stateSyncPending = true
+            // Bound SwiftUI updates to 20 Hz. Read current geometry when this
+            // fires, so the last notification is delivered even after scrolling stops.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self else { return }
+                self.stateSyncPending = false
+                guard !self.isRestoring else { return }
+                #if !os(macOS)
+                if let scrollView = self.view?.descendantScrollView {
+                    self.handleObservedScroll(in: scrollView)
+                }
+                #endif
                 self.syncState()
             }
         }
 
         private func scheduleSelectionSync() {
-            guard !isRestoring else { return }
+            guard !isRestoring, !selectionSyncPending else { return }
+            selectionSyncPending = true
             DispatchQueue.main.async { [weak self] in
-                guard let self, !self.isRestoring else { return }
+                guard let self else { return }
+                self.selectionSyncPending = false
+                guard !self.isRestoring else { return }
                 self.syncSelection()
             }
         }
@@ -592,7 +608,7 @@ extension PDFKitView {
                 object: contentView,
                 queue: .main
             ) { [weak self] _ in
-                Task { @MainActor in self?.scheduleStateSync() }
+                MainActor.assumeIsolated { self?.scheduleStateSync() }
             })
         }
 
@@ -628,12 +644,8 @@ extension PDFKitView {
                 return
             }
             scrollObservation = scrollView.observe(\.contentOffset, options: [.new]) {
-                [weak self, weak scrollView] _, _ in
-                Task { @MainActor in
-                    guard let scrollView else { return }
-                    self?.handleObservedScroll(in: scrollView)
-                    self?.syncState()
-                }
+                [weak self] _, _ in
+                MainActor.assumeIsolated { self?.scheduleStateSync() }
             }
             lastObservedVerticalOffset = scrollView.contentOffset.y
             updateContentInsets(bottomOverlayInset: parent.bottomOverlayInset)
@@ -724,14 +736,15 @@ struct PDFThumbnailStrip: View {
     let onInteractionBegan: () -> Void
     let onSelectPage: (Int) -> Void
     let onTapPage: () -> Void
-    @State private var document: PDFDocument?
+    @State private var renderer: PDFThumbnailRenderer?
+    @State private var pageCount = 0
 
     var body: some View {
         Group {
             if isCompact {
                 PDFPagePositionTrack(
                     pageIndex: pageIndex,
-                    pageCount: document?.pageCount ?? 0,
+                    pageCount: pageCount,
                     viewportRange: viewportRange,
                     onInteractionBegan: onInteractionBegan,
                     onSelectPage: onSelectPage,
@@ -746,13 +759,13 @@ struct PDFThumbnailStrip: View {
                     ScrollViewReader { proxy in
                         ScrollView(.horizontal) {
                             LazyHStack(spacing: 8) {
-                                if let document {
-                                    ForEach(0..<document.pageCount, id: \.self) { index in
+                                if let renderer {
+                                    ForEach(0..<pageCount, id: \.self) { index in
                                         Button {
                                             pageIndex = index
                                         } label: {
                                             PDFPageThumbnail(
-                                                document: document,
+                                                renderer: renderer,
                                                 pageIndex: index,
                                                 isSelected: pageIndex == index
                                             )
@@ -773,6 +786,9 @@ struct PDFThumbnailStrip: View {
                         .onAppear {
                             proxy.scrollTo(pageIndex, anchor: .center)
                         }
+                        .onChange(of: pageCount) { _, _ in
+                            proxy.scrollTo(pageIndex, anchor: .center)
+                        }
                         .onChange(of: pageIndex) { _, page in
                             withAnimation(.easeInOut(duration: 0.18)) {
                                 proxy.scrollTo(page, anchor: .center)
@@ -786,12 +802,18 @@ struct PDFThumbnailStrip: View {
         .background(.bar)
         .animation(.smooth(duration: 0.24), value: isCompact)
         .task(id: url) {
-            document = PDFDocument(url: url)
+            renderer = nil
+            pageCount = 0
+            let source = PDFThumbnailRenderer(url: url)
+            let count = await source.pageCount()
+            guard !Task.isCancelled else { return }
+            pageCount = count
+            renderer = source
         }
     }
 
     private var pagePositionAccessibilityValue: String {
-        guard let pageCount = document?.pageCount, pageCount > 0 else { return "" }
+        guard pageCount > 0 else { return "" }
         return "Page \(min(pageIndex + 1, pageCount)) of \(pageCount)"
     }
 }
@@ -861,7 +883,7 @@ private struct PDFPagePositionTrack: View {
 }
 
 private struct PDFPageThumbnail: View {
-    let document: PDFDocument
+    let renderer: PDFThumbnailRenderer
     let pageIndex: Int
     let isSelected: Bool
     @State private var thumbnail: PlatformPDFImage?
@@ -898,13 +920,54 @@ private struct PDFPageThumbnail: View {
                 .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
         }
         .frame(width: 58)
-        .task(id: pageIndex) {
-            thumbnail = document.page(at: pageIndex)?.thumbnail(
-                of: CGSize(width: 104, height: 128),
-                for: .cropBox
-            )
+        .task(id: ObjectIdentifier(renderer)) {
+            thumbnail = nil
+            guard let data = await renderer.thumbnailData(pageIndex: pageIndex),
+                  !Task.isCancelled else { return }
+            thumbnail = PlatformPDFImage(data: data)
         }
         .accessibilityLabel("Page \(pageIndex + 1)")
+    }
+}
+
+// Own the PDF on a serial actor, separate from PDFView's mutable document.
+// Only encoded image data crosses actor boundaries. The actor survives compact
+// mode, so expanding the strip does not render the same pages again.
+actor PDFThumbnailRenderer {
+    private let url: URL
+    private var document: PDFDocument?
+    private let cache = NSCache<NSNumber, NSData>()
+
+    init(url: URL) {
+        self.url = url
+        cache.totalCostLimit = 8 * 1024 * 1024
+        cache.countLimit = 128
+    }
+
+    func pageCount() -> Int {
+        guard !Task.isCancelled else { return 0 }
+        if document == nil { document = PDFDocument(url: url) }
+        return document?.pageCount ?? 0
+    }
+
+    func thumbnailData(pageIndex: Int) -> Data? {
+        guard !Task.isCancelled else { return nil }
+        let key = NSNumber(value: pageIndex)
+        if let cached = cache.object(forKey: key) { return cached as Data }
+        guard pageIndex >= 0, pageIndex < pageCount() else { return nil }
+        let data: Data? = autoreleasepool {
+            guard let image = document?.page(at: pageIndex)?.thumbnail(
+                of: CGSize(width: 104, height: 128), for: .cropBox
+            ) else { return nil }
+            #if os(macOS)
+            return image.tiffRepresentation
+            #else
+            return image.pngData()
+            #endif
+        }
+        guard !Task.isCancelled, let data else { return nil }
+        cache.setObject(data as NSData, forKey: key, cost: max(data.count, 104 * 128 * 4))
+        return data
     }
 }
 

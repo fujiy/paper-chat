@@ -1,5 +1,6 @@
 // Run from the repository root:
-// xcrun swiftc -swift-version 6 -module-cache-path /tmp/paperchat-swift-cache \
+// xcrun swiftc -target "$(uname -m)-apple-macos15.0" -swift-version 6 \
+//   -module-cache-path /tmp/paperchat-swift-cache \
 //   client/PaperChat/Models.swift client/PaperChat/PDFKitView.swift \
 //   client/Tests/PDFInitialLayoutCheck.swift -o /tmp/paperchat-pdf-layout-check
 // /tmp/paperchat-pdf-layout-check
@@ -14,6 +15,7 @@ struct PDFInitialLayoutCheck {
         var page = 0
         var scale = 0.0
         var offset = 0.0
+        var offsetUpdates = 0
     }
 
     static func settle(_ window: NSWindow) {
@@ -39,7 +41,7 @@ struct PDFInitialLayoutCheck {
         NSColor.white.setFill()
         NSRect(x: 0, y: 0, width: 612, height: 792).fill()
         image.unlockFocus()
-        document.insert(PDFPage(image: image)!, at: 0)
+        for index in 0..<12 { document.insert(PDFPage(image: image)!, at: index) }
         precondition(document.write(to: url))
 
         for savedScale in [0.0, 1.75] {
@@ -50,7 +52,10 @@ struct PDFInitialLayoutCheck {
                 pageIndex: Binding(get: { state.page }, set: { state.page = $0 }),
                 bookmarkPageIndex: .constant(0),
                 zoomScale: Binding(get: { state.scale }, set: { state.scale = $0 }),
-                scrollOffset: Binding(get: { state.offset }, set: { state.offset = $0 }),
+                scrollOffset: Binding(get: { state.offset }, set: {
+                    state.offset = $0
+                    state.offsetUpdates += 1
+                }),
                 pagePosition: .constant(0),
                 viewportRange: .constant(.full), selectedText: .constant(nil),
                 selectionSnapshot: .constant(nil), highlightTarget: nil,
@@ -89,8 +94,39 @@ struct PDFInitialLayoutCheck {
             pdf.scaleFactor = pdf.maxScaleFactor
             precondition(pdf.scaleFactor > pdf.scaleFactorForSizeToFit * 7.9,
                          "Maximum zoom remains restricted")
+            pdf.scaleFactor = previousScale
+            settle(window)
+            let clip = pdf.documentView!.enclosingScrollView!.contentView
+            state.offsetUpdates = 0
+            for index in 1...100 {
+                clip.scroll(to: NSPoint(x: 0, y: CGFloat(index * 4)))
+                NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: clip)
+            }
+            precondition(state.offsetUpdates == 0, "Scroll callback published synchronously")
+            settle(window)
+            precondition(state.offsetUpdates > 0 && state.offsetUpdates <= 2,
+                         "A scroll burst was not coalesced: \(state.offsetUpdates) updates")
+            precondition(abs(state.offset - clip.bounds.origin.y) <= 0.5,
+                         "The final scroll position was lost")
+            let updates = state.offsetUpdates
+            settle(window)
+            precondition(state.offsetUpdates == updates, "Idle geometry republished unchanged state")
+            state.offsetUpdates = 0
+            let started = Date()
+            for index in 1...60 {
+                clip.scroll(to: NSPoint(x: 0, y: CGFloat(400 + index * 4)))
+                NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: clip)
+                RunLoop.main.run(until: Date().addingTimeInterval(0.005))
+            }
+            let duration = Date().timeIntervalSince(started)
+            settle(window)
+            precondition(state.offsetUpdates <= Int(ceil(duration / 0.05)) + 1,
+                         "Continuous scrolling exceeded the state update budget")
+            precondition(abs(state.offset - clip.bounds.origin.y) <= 0.5,
+                         "Continuous scrolling lost the trailing position")
+            print("60 scroll events in \(String(format: "%.2f", duration))s: \(state.offsetUpdates) position updates")
             window.close()
         }
-        print("PDF initial layout checks passed (new document, saved zoom, resize, maximum zoom)")
+        print("PDF initial layout checks passed (new document, saved zoom, resize, maximum zoom, scroll burst, final position)")
     }
 }

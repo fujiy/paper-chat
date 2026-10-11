@@ -66,6 +66,8 @@ final class AppModel: ObservableObject {
     }
 
     deinit { networkMonitor.cancel() }
+    private var pendingReadingSessions: [String: PaperSession] = [:]
+    private var readingStateBatchTask: Task<Void, Never>?
     private var saveTasks: [String: Task<Void, Never>] = [:]
     private var pageViewTasks: [String: Task<Void, Never>] = [:]
     private var pageViewTrackers: [String: PageViewTracker] = [:]
@@ -160,6 +162,9 @@ final class AppModel: ObservableObject {
         isSyncingReadingStates = false
         paperRefreshTasks.values.forEach { $0.cancel() }
         paperRefreshTasks = [:]
+        readingStateBatchTask?.cancel()
+        readingStateBatchTask = nil
+        pendingReadingSessions = [:]
         saveTasks.values.forEach { $0.cancel() }
         saveTasks = [:]
         pageViewTasks.values.forEach { $0.cancel() }
@@ -237,6 +242,7 @@ final class AppModel: ObservableObject {
     }
 
     func flushLocalWorkspace() async {
+        flushPendingReadingStates()
         while let task = persistenceTask {
             let revision = workspace.revision
             await task.value
@@ -1126,6 +1132,7 @@ final class AppModel: ObservableObject {
     }
 
     func appDidResignActive() {
+        flushPendingReadingStates()
         guard let session = activeSession else { return }
         stopPageViewTracking(session)
         rememberReadingState(session)
@@ -1439,10 +1446,10 @@ final class AppModel: ObservableObject {
         pagePosition: Double? = nil
     ) {
         recordPageActivity(in: session, pageIndex: pageIndex)
-        session.pageIndex = pageIndex
-        session.zoomScale = zoomScale
-        session.scrollOffset = scrollOffset
-        if let pagePosition { session.pagePosition = pagePosition }
+        if session.pageIndex != pageIndex { session.pageIndex = pageIndex }
+        if session.zoomScale != zoomScale { session.zoomScale = zoomScale }
+        if session.scrollOffset != scrollOffset { session.scrollOffset = scrollOffset }
+        if let pagePosition, session.pagePosition != pagePosition { session.pagePosition = pagePosition }
         scheduleReadingStateSave(session)
     }
 
@@ -1471,15 +1478,38 @@ final class AppModel: ObservableObject {
 
     private func scheduleReadingStateSave(_ session: PaperSession) {
         guard !isSimulatorBookmarkReproMode else { return }
-        guard rememberReadingState(session) else { return }
-        // Persist before the network debounce, including when offline.
-        persistWorkspace()
-        saveTasks[session.id]?.cancel()
-        saveTasks[session.id] = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled, let self, !isOffline else { return }
-            await syncPendingReadingStates()
+        pendingReadingSessions[session.id] = session
+        guard readingStateBatchTask == nil else { return }
+        readingStateBatchTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(250)) }
+            catch { return }
+            self?.flushPendingReadingStates()
         }
+    }
+
+    private func flushPendingReadingStates() {
+        readingStateBatchTask?.cancel()
+        readingStateBatchTask = nil
+        let sessions = pendingReadingSessions
+        pendingReadingSessions.removeAll(keepingCapacity: true)
+        var changed = false
+        for session in sessions.values {
+            guard rememberReadingState(session) else { continue }
+            changed = true
+            // Do not create/cancel tasks on every scroll event, or cancel an
+            // in-flight request when a newer reading position arrives.
+            guard saveTasks[session.id] == nil else { continue }
+            let id = session.id
+            saveTasks[id] = Task { [weak self] in
+                do { try await Task.sleep(for: .milliseconds(500)) }
+                catch { return }
+                guard let self else { return }
+                self.saveTasks[id] = nil
+                guard !self.isOffline else { return }
+                await self.syncPendingReadingStates()
+            }
+        }
+        if changed { persistWorkspace() }
     }
 
     private func saveReadingState(_ session: PaperSession) async throws {
@@ -1490,6 +1520,7 @@ final class AppModel: ObservableObject {
 
     private func syncPendingReadingStates() async {
         guard !isSyncingReadingStates, !isOffline else { return }
+        flushPendingReadingStates()
         let generation = workspaceGeneration
         isSyncingReadingStates = true
         defer {
@@ -1508,6 +1539,9 @@ final class AppModel: ObservableObject {
                         activeThreadID: state.activeThreadID
                     )
                     guard generation == workspaceGeneration else { return }
+                    // Incorporate edits received during the request before
+                    // deciding whether this acknowledgement is still current.
+                    flushPendingReadingStates()
                     if workspace.pendingReadingStates[id]?.revision == state.revision {
                         workspace.pendingReadingStates.removeValue(forKey: id)
                     }

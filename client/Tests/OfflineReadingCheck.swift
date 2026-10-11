@@ -123,6 +123,22 @@ private final class StubProtocol: URLProtocol, @unchecked Sendable {
         session.pdfSearchQuery = "Cached paper"
         await model.searchPDF("Cached paper", in: session)
         precondition(session.pdfSearchResults.count == 3, "PDF text search depended on the server")
+        let previousReadingState = session.paper.readingState
+        for step in 1...100 {
+            model.pdfViewStateChanged(in: session, pageIndex: 0, zoomScale: 2,
+                                      scrollOffset: Double(step) / 100)
+        }
+        precondition(session.paper.readingState == previousReadingState,
+                     "Scroll events rebuilt saved paper metadata before the batch")
+        model.pdfViewStateChanged(in: session, pageIndex: 0, zoomScale: 2, scrollOffset: 0.55)
+        try await Task.sleep(for: .milliseconds(450))
+        let batched = try await store.loadWorkspace()!
+        precondition(batched.pendingReadingStates[paper.id]?.scrollOffset == 0.55,
+                     "The trailing reading position was not saved automatically")
+        model.pdfViewStateChanged(in: session, pageIndex: 0, zoomScale: 2, scrollOffset: 0.65)
+        model.appDidResignActive()
+        precondition(session.paper.readingState?.scrollOffset == 0.65,
+                     "Leaving the app did not flush pending reading metadata")
         model.pdfViewStateChanged(in: session, pageIndex: 0, zoomScale: 2, scrollOffset: 0.7)
         await model.flushLocalWorkspace()
         let saved = try await store.loadWorkspace()!
